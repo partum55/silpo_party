@@ -184,6 +184,14 @@ export function readOnlyResult(input: Input, responseText: string) {
   };
 }
 
+export function planAfterValidation(
+  currentPlan: PartyPlanDraft | null,
+  candidatePlan: PartyPlanDraft | null,
+  readiness: "needs_input" | "invalid" | "ready",
+) {
+  return readiness === "ready" ? candidatePlan : currentPlan;
+}
+
 async function queryVariants(party: Input["currentParty"]) {
   const wishes = party.members.flatMap((member) => member.wishes
     .filter((wish) => wish.fulfillmentStrategy !== "recipe")
@@ -363,7 +371,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
         updatedPreferences: preferencesFromParty(applied.party),
         // Never replace an existing basket with an invalid partial draft. A transient catalog miss while
         // validating an incremental addition must not silently delete products that were already visible.
-        updatedPlan: result.readiness === "ready" ? result.currentPlan : (inputData.currentPlan ?? result.currentPlan),
+        updatedPlan: planAfterValidation(inputData.currentPlan as PartyPlanDraft | null, result.currentPlan, result.readiness),
         blockers: result.blockers,
         warnings: result.warnings,
         questions: result.questions,

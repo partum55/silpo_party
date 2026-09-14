@@ -129,7 +129,7 @@ const products: Record<string, HydratedProduct> = {
     available: true,
     category: "food",
     packageSize: { amount: 900, unit: "ml" },
-    metadata: { ingredients: ["молоко коров'яче"], allergens: ["молоко"], labels: [] },
+    metadata: { ingredients: [], allergens: [], labels: [] },
   },
   lactoseFreeMilk: {
     id: "lactoseFreeMilk",
@@ -362,7 +362,7 @@ test("unknown Silpo restrictions fail closed unless the product explicitly match
 test("a lactose restriction rejects regular milk and accepts lactose-free milk", async () => {
   const restrictedInput: PartyPlanningInput = {
     request: "Add milk",
-    currentParty: { members: [{ id: "a", restrictions: ["Без лактози"] }] },
+    currentParty: { members: [{ id: "a", restrictions: ["lactose"] }] },
   };
   const regular = await validateProposal({
     input: restrictedInput,

@@ -30,8 +30,11 @@ test("normalizes active food restrictions from Silpo profile responses", () => {
       { name: "Без лактози", selected: true },
       { label: "Без глютену", enabled: false },
       { code: "vegetarian", active: true },
+      { slug: "no-added-sugar", name: null },
+      { slug: "all-food", name: null },
+      { slug: "lactoza", name: null },
     ],
-  }), ["Без лактози", "vegetarian"]);
+  }), ["Без лактози", "vegetarian", "no-added-sugar", "lactose"]);
 
   assert.deepEqual(extractFoodRestrictions({
     content: [{ type: "text", text: JSON.stringify({ restrictions: { lactoseFree: true, vegan: false } }) }],
