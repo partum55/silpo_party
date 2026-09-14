@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const planningModeSchema = z.enum(["SHOPPING", "DINNER", "EVENT"]);
+
 export const wishSchema = z.object({
   id: z.string().min(1),
   text: z.string().min(1),
@@ -48,6 +50,8 @@ export const memberSchema = z.object({
 
 export const partyPlanningInputSchema = z.object({
   request: z.string().min(1),
+  mode: planningModeSchema.default("EVENT"),
+  budgetUah: z.number().nonnegative().nullable().default(null),
   currentParty: z.object({
     members: z.array(memberSchema).max(10),
   }),

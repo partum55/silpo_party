@@ -99,6 +99,7 @@ export function mergeWithProtectedPlan({
   affectedWishKeys,
   planOperations,
   invalidProductIds = [],
+  keepDistinctAdditions = false,
 }: {
   baseline: PlannerProposal;
   proposed: PlannerProposal;
@@ -106,6 +107,7 @@ export function mergeWithProtectedPlan({
   affectedWishKeys: string[];
   planOperations: PlanOperation[];
   invalidProductIds?: string[];
+  keepDistinctAdditions?: boolean;
 }): PlannerProposal {
   const affected = new Set(affectedWishKeys);
   const targetedProducts = new Set(planOperations.flatMap((operation) => "targetType" in operation && operation.targetType === "product" ? [operation.targetId] : []));
@@ -124,7 +126,14 @@ export function mergeWithProtectedPlan({
 
   const protectedSelections = (baseline.selections ?? []).filter((item) => !bannedLookups.has(item.productId));
   const proposedSelections = (proposed.selections ?? []).filter((item) => !bannedLookups.has(item.productId));
-  const selections = [...protectedSelections, ...proposedSelections.filter((item) => !protectedSelections.some((kept) => kept.productId === item.productId))];
+  const selections = [...protectedSelections, ...proposedSelections.filter((item) => {
+    const matching = protectedSelections.filter((kept) => kept.productId === item.productId);
+    if (!matching.length) return true;
+    if (!keepDistinctAdditions || !planOperations.some((operation) => operation.action === "add")) return false;
+    return !matching.some((kept) => kept.quantity === item.quantity
+      && kept.assignedMemberIds.length === item.assignedMemberIds.length
+      && kept.assignedMemberIds.every((id) => item.assignedMemberIds.includes(id)));
+  })];
   const protectedRecipes = (baseline.recipes ?? []).filter((recipe) => !targetedRecipes.has(recipe.title) && !affectedRecipeTitles.has(recipe.title) && !invalidRecipeTitles.has(recipe.title));
   const recipes = [...protectedRecipes, ...(proposed.recipes ?? []).filter((recipe) => !targetedRecipes.has(recipe.title) && !affectedRecipeTitles.has(recipe.title) && !protectedRecipes.some((kept) => kept.title === recipe.title))];
   const protectedFulfillments = (baseline.wishFulfillments ?? []).filter((item) => {
@@ -141,7 +150,11 @@ export function validatePlanOperations(before: PartyPlanDraft | null, after: Par
   const afterProducts = new Set(after?.products.map((product) => product.id) ?? []);
   const beforeRecipes = new Set(before?.recipes.map((recipe) => recipe.title) ?? []);
   const afterRecipes = new Set(after?.recipes.map((recipe) => recipe.title) ?? []);
-  const addedProducts = after?.products.filter((product) => !beforeProducts.has(product.id)) ?? [];
+  const addedProducts = after?.products.filter((product) => !(before?.products ?? []).some((previous) =>
+    previous.id === product.id
+    && previous.quantity === product.quantity
+    && previous.assignedMemberIds.length === product.assignedMemberIds.length
+    && previous.assignedMemberIds.every((id) => product.assignedMemberIds.includes(id)))) ?? [];
   const addedRecipes = after?.recipes.filter((recipe) => !beforeRecipes.has(recipe.title)) ?? [];
 
   return operations.flatMap((operation) => {

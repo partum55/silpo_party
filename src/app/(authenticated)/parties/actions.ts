@@ -5,22 +5,44 @@ import { revalidatePath } from "next/cache";
 
 import { requireUser } from "@/lib/auth";
 import { finalizeCart } from "@/lib/cart/service";
-import { createParty, deleteParty, joinPartyByCode, leaveParty } from "@/lib/party/service";
+import { createParty, deleteParty, joinPartyByCode, leaveParty, updatePartyBudget, type PartyMode } from "@/lib/party/service";
 import { RuleViolation } from "@/lib/party/rules";
 
 export async function createPartyAction(formData: FormData) {
   const user = await requireUser();
   const name = String(formData.get("name") ?? "").trim();
+  const rawMode = String(formData.get("mode") ?? "EVENT");
+  const mode: PartyMode = rawMode === "SHOPPING" || rawMode === "DINNER" ? rawMode : "EVENT";
+  const rawBudget = String(formData.get("budgetUah") ?? "").trim();
+  const budgetUah = rawBudget ? Number(rawBudget) : null;
   if (!name) redirect("/?error=name_required");
+  if (budgetUah !== null && (!Number.isFinite(budgetUah) || budgetUah < 0)) redirect("/?error=invalid_budget");
 
   let partyId: string;
   try {
-    partyId = (await createParty(user.id, name)).id;
+    partyId = (await createParty(user.id, name, mode, budgetUah)).id;
   } catch (error) {
     if (error instanceof RuleViolation) redirect(`/?error=${error.code}`);
     throw error;
   }
   redirect(`/parties/${partyId}`);
+}
+
+export async function updatePartyBudgetAction(formData: FormData) {
+  const user = await requireUser();
+  const partyId = String(formData.get("partyId") ?? "");
+  const rawBudget = String(formData.get("budgetUah") ?? "").trim();
+  const budgetUah = rawBudget ? Number(rawBudget) : null;
+  if (budgetUah !== null && (!Number.isFinite(budgetUah) || budgetUah < 0)) {
+    redirect(`/parties/${partyId}?error=invalid_budget`);
+  }
+  try {
+    await updatePartyBudget(partyId, user.id, budgetUah);
+  } catch (error) {
+    if (error instanceof RuleViolation) redirect(`/parties/${partyId}?error=${error.code}`);
+    throw error;
+  }
+  revalidatePath(`/parties/${partyId}`);
 }
 
 export async function joinPartyAction(formData: FormData) {

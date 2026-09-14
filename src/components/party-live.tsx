@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { deletePartyAction, finalizeCartAction, leavePartyAction } from "@/app/(authenticated)/parties/actions";
+import { deletePartyAction, finalizeCartAction, leavePartyAction, updatePartyBudgetAction } from "@/app/(authenticated)/parties/actions";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type ChatMessage = {
@@ -17,19 +17,41 @@ type Member = { user_id: string; role: "CREATOR" | "MEMBER"; joined_at: string }
 
 type CartItem = { id: string; name: string; quantity: number; price_uah: number | null };
 
-type Cart = { status: "DRAFT" | "FINALIZED"; total_uah: number | null; checkout_url: string | null; items: CartItem[] };
+type Cart = {
+  status: "DRAFT" | "FINALIZED";
+  total_uah: number | null;
+  checkout_url: string | null;
+  items: CartItem[];
+  recipes: Array<{ title: string; sourceUrl: string | null; steps: string[]; assignedMemberIds: string[] }>;
+  memberTotals: Array<{ memberId: string; amountUah: number }>;
+};
 
 type PartyStatus = {
   status: "ACTIVE" | "COMPLETED";
   agent_status: string;
   agent_error: string | null;
   join_code: string;
+  mode: "SHOPPING" | "DINNER" | "EVENT";
+  budget_uah: number | null;
+};
+
+const modeLabels: Record<PartyStatus["mode"], string> = {
+  SHOPPING: "Закупка товарів",
+  DINNER: "Приготування вечері",
+  EVENT: "Автономне планування події",
+};
+
+const modePlaceholders: Record<PartyStatus["mode"], string> = {
+  SHOPPING: "Наприклад: додай мені молоко і хліб",
+  DINNER: "Наприклад: хочу приготувати пасту карбонару",
+  EVENT: "Наприклад: заплануй шашлики з друзями на 6",
 };
 
 // Everything on this page that can change without this viewer doing anything — a message from someone else,
 // the agent's reply, its status ticking over, a member joining/leaving, the cart being rebuilt — arrives
 // through one Supabase Realtime channel (RLS-scoped: only party members receive events) instead of requiring
-// a page refresh. party_members/carts/cart_items changes are refetched via the existing API routes rather
+// a page refresh. A status poll acts as a reconnect fallback because a browser/network can close that channel.
+// party_members/carts/cart_items changes are refetched via the existing API routes rather
 // than patched incrementally (simpler and safer given syncCartFromPlan replaces cart_items wholesale, which
 // would otherwise show up as a burst of individual delete+insert events); chat_messages and the parties row
 // itself are cheap to patch directly from the change payload.
@@ -57,13 +79,56 @@ export function PartyLive({
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLUListElement>(null);
+  const lastAgentStatusRef = useRef(initialParty.agent_status);
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
-    const refreshMembers = () =>
-      fetch(`/api/parties/${partyId}/members`).then((response) => (response.ok ? response.json() : null)).then((data) => data && setMembers(data));
-    const refreshCart = () =>
-      fetch(`/api/parties/${partyId}/cart`).then((response) => (response.ok ? response.json() : null)).then((data) => data && setCart(data));
+    let active = true;
+    let realtimeConnected = false;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+
+    async function readJson<T>(path: string): Promise<T | null> {
+      try {
+        const response = await fetch(path, { cache: "no-store" });
+        return response.ok ? await response.json() as T : null;
+      } catch {
+        return null;
+      }
+    }
+
+    const refreshMembers = async () => {
+      const data = await readJson<Member[]>(`/api/parties/${partyId}/members`);
+      if (active && data) setMembers(data);
+    };
+    const refreshMessages = async () => {
+      const data = await readJson<ChatMessage[]>(`/api/parties/${partyId}/chat`);
+      if (active && data) setMessages(data);
+    };
+    const refreshCart = async () => {
+      const data = await readJson<Cart>(`/api/parties/${partyId}/cart`);
+      if (active && data) setCart(data);
+    };
+
+    function applyAgentState(agentStatus: string, agentError: string | null) {
+      const changed = agentStatus !== lastAgentStatusRef.current;
+      lastAgentStatusRef.current = agentStatus;
+      setParty((previous) => ({ ...previous, agent_status: agentStatus, agent_error: agentError }));
+      if (changed && (agentStatus === "DONE" || agentStatus === "ERROR")) {
+        void Promise.all([refreshMessages(), refreshCart()]);
+      }
+    }
+
+    async function refreshAgentState() {
+      const data = await readJson<{ agentStatus: string; agentError: string | null }>(
+        `/api/parties/${partyId}/agent-status`,
+      );
+      if (active && data) applyAgentState(data.agentStatus, data.agentError);
+    }
+
+    async function poll() {
+      await Promise.all([refreshAgentState(), ...(realtimeConnected ? [] : [refreshMessages()])]);
+      if (active) pollTimer = setTimeout(poll, realtimeConnected ? 15_000 : 2_000);
+    }
 
     const channel = supabase
       .channel(`party-${partyId}`)
@@ -72,11 +137,14 @@ export function PartyLive({
         { event: "UPDATE", schema: "public", table: "parties", filter: `id=eq.${partyId}` },
         (payload) => {
           const next = payload.new as Record<string, unknown>;
+          applyAgentState(next.agent_status as string, (next.agent_error as string | null) ?? null);
           setParty((previous) => ({
             ...previous,
             status: next.status as PartyStatus["status"],
-            agent_status: next.agent_status as string,
-            agent_error: (next.agent_error as string | null) ?? null,
+            mode: (next.mode as PartyStatus["mode"] | undefined) ?? previous.mode,
+            budget_uah: next.budget_uah === undefined
+              ? previous.budget_uah
+              : next.budget_uah === null ? null : Number(next.budget_uah),
           }));
         },
       )
@@ -92,12 +160,24 @@ export function PartyLive({
         },
       )
       .subscribe((status, err) => {
+        realtimeConnected = status === "SUBSCRIBED";
         // No UI depends on this — it's here so a silent Realtime connection failure (RLS denial, network
         // issue) shows up in the browser console instead of just looking like "nothing updates live".
         if (status !== "SUBSCRIBED") console.log(`[party-live] realtime channel status: ${status}`, err ?? "");
       });
 
+    void poll();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void Promise.all([refreshAgentState(), refreshMessages(), refreshCart()]);
+      }
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+
     return () => {
+      active = false;
+      if (pollTimer) clearTimeout(pollTimer);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       supabase.removeChannel(channel);
     };
   }, [partyId]);
@@ -124,6 +204,8 @@ export function PartyLive({
       // correctly deduped by the handler above instead of appearing as a second copy.
       const sent = (await response.json()) as ChatMessage;
       setMessages((previous) => (previous.some((message) => message.id === sent.id) ? previous : [...previous, sent]));
+      lastAgentStatusRef.current = "THINKING";
+      setParty((previous) => ({ ...previous, agent_status: "THINKING", agent_error: null }));
     } catch {
       setContent(text); // put it back so nothing is silently lost
     } finally {
@@ -139,6 +221,24 @@ export function PartyLive({
         Статус: {party.status} · Агент: {party.agent_status}
         {party.agent_status === "ERROR" && party.agent_error ? ` — ${party.agent_error}` : ""}
       </p>
+      <p className="text-sm text-zinc-600">
+        Сюжет: {modeLabels[party.mode]} · Бюджет: {party.budget_uah === null ? "не задано" : `${party.budget_uah} грн`}
+      </p>
+      {isCreator && isActive && (
+        <form action={updatePartyBudgetAction} className="flex max-w-sm gap-2">
+          <input type="hidden" name="partyId" value={partyId} />
+          <input
+            name="budgetUah"
+            type="number"
+            min="0"
+            step="0.01"
+            defaultValue={party.budget_uah ?? ""}
+            placeholder="Загальний бюджет, грн"
+            className="min-w-0 flex-1 rounded border px-3 py-2"
+          />
+          <button type="submit" className="rounded border px-3 py-2">Зберегти бюджет</button>
+        </form>
+      )}
       {isCreator && (
         <p className="text-sm">
           Код приєднання: <span className="font-mono font-semibold">{party.join_code}</span>
@@ -179,7 +279,7 @@ export function PartyLive({
             <input
               value={content}
               onChange={(event) => setContent(event.target.value)}
-              placeholder="Напишіть агенту... (напр. «додай молоко»)"
+              placeholder={modePlaceholders[party.mode]}
               required
               disabled={sending}
               className="flex-1 rounded border px-3 py-2 disabled:opacity-50"
@@ -202,6 +302,37 @@ export function PartyLive({
           ))}
         </ul>
         <p className="font-medium">Разом: {cart.total_uah ?? 0} грн</p>
+        {party.budget_uah !== null && (
+          <p className={(cart.total_uah ?? 0) > party.budget_uah ? "text-sm text-red-600" : "text-sm text-green-700"}>
+            {(cart.total_uah ?? 0) > party.budget_uah
+              ? `Перевищення бюджету: ${((cart.total_uah ?? 0) - party.budget_uah).toFixed(2)} грн`
+              : `Залишок бюджету: ${(party.budget_uah - (cart.total_uah ?? 0)).toFixed(2)} грн`}
+          </p>
+        )}
+        {cart.recipes.length > 0 && (
+          <div className="space-y-2 text-sm">
+            <p className="font-medium">Рецепти:</p>
+            {cart.recipes.map((recipe) => (
+              <details key={recipe.title} className="rounded border p-2">
+                <summary className="cursor-pointer font-medium">{recipe.title}</summary>
+                {recipe.sourceUrl && <a href={recipe.sourceUrl} target="_blank" rel="noopener noreferrer" className="underline">Джерело рецепта</a>}
+                <ol className="list-decimal space-y-1 pl-5">
+                  {recipe.steps.map((step, index) => <li key={`${recipe.title}-${index}`}>{step}</li>)}
+                </ol>
+              </details>
+            ))}
+          </div>
+        )}
+        <div className="text-sm text-zinc-600">
+          <p className="font-medium">До сплати:</p>
+          <ul>
+            {cart.memberTotals.map((total) => (
+              <li key={total.memberId}>
+                {total.memberId === currentUserId ? "Ви" : total.memberId}: {total.amountUah.toFixed(2)} грн
+              </li>
+            ))}
+          </ul>
+        </div>
         {cart.checkout_url && (
           <a href={cart.checkout_url} target="_blank" rel="noopener noreferrer" className="text-sm underline">
             Оформити на Silpo →

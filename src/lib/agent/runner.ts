@@ -4,7 +4,7 @@ import { env } from "@/lib/env";
 import type { Db } from "@/lib/party/access";
 
 async function loadPartyMembers(db: Db, partyId: string) {
-  const { data, error } = await db.from("party_members").select("user_id").eq("party_id", partyId);
+  const { data, error } = await db.from("party_members").select("user_id, wishes").eq("party_id", partyId);
   if (error) throw error;
   return (data ?? []).map((row) => ({
     id: row.user_id as string,
@@ -12,9 +12,18 @@ async function loadPartyMembers(db: Db, partyId: string) {
     // ponytail: per-member wish lists are not persisted across chat turns (no dedicated table) — only the
     // resulting cart plan is. This loses cross-turn wish-based re-planning nuance; add a wishes table and
     // hydrate it here if that nuance is ever needed.
-    wishes: [] as never[],
+    wishes: (Array.isArray(row.wishes) ? row.wishes : []) as never[],
     status: "collecting" as const,
   }));
+}
+
+async function loadPartySettings(db: Db, partyId: string) {
+  const { data, error } = await db.from("parties").select("mode, budget_uah").eq("id", partyId).single();
+  if (error) throw error;
+  return {
+    mode: data.mode as "SHOPPING" | "DINNER" | "EVENT",
+    budgetUah: data.budget_uah === null ? null : Number(data.budget_uah),
+  };
 }
 
 async function loadPlan(db: Db, partyId: string) {
@@ -24,7 +33,7 @@ async function loadPlan(db: Db, partyId: string) {
 }
 
 /**
- * Runs one chat message through the separately-deployed agent (apps/agent, its own Vercel project — see
+ * Runs one chat message through the separately-deployed agent (apps/agent; see
  * AGENT_URL) via its Mastra-generated REST API, instead of importing the workflow in-process. Authenticated
  * with a shared-secret bearer token (AGENT_INTERNAL_TOKEN, set identically on both deployments) since the
  * agent's HTTP API would otherwise let any caller run workflows against an arbitrary Silpo account.
@@ -47,7 +56,11 @@ export async function runConversationalTurn(db: Db, {
   actorId: string;
   message: string;
 }) {
-  const [members, currentPlan] = await Promise.all([loadPartyMembers(db, partyId), loadPlan(db, partyId)]);
+  const [members, currentPlan, settings] = await Promise.all([
+    loadPartyMembers(db, partyId),
+    loadPlan(db, partyId),
+    loadPartySettings(db, partyId),
+  ]);
 
   const response = await fetch(`${env("AGENT_URL")}/api/workflows/conversationalPartyWorkflow/start-async`, {
     method: "POST",
@@ -58,12 +71,13 @@ export async function runConversationalTurn(db: Db, {
     body: JSON.stringify({
       inputData: {
         message,
+        mode: settings.mode,
         actorId,
         hostId: actorId,
         scope: "auto",
         currentParty: { members },
         currentPlan,
-        budgetUah: null,
+        budgetUah: settings.budgetUah,
         partyWideRestrictions: [],
         blockers: [],
         warnings: [],

@@ -1,3 +1,6 @@
+/* eslint-disable react-hooks/error-boundaries -- RuleViolation is raised while loading, before JSX is rendered. */
+import Link from "next/link";
+
 import { PartyLive } from "@/components/party-live";
 import { requireUser } from "@/lib/auth";
 import { getCart } from "@/lib/cart/service";
@@ -27,9 +30,9 @@ export default async function PartyPage({
 
     return (
       <main className="mx-auto max-w-2xl space-y-6 p-6">
-        <a href="/" className="text-sm text-zinc-500 underline">
+        <Link href="/" className="text-sm text-zinc-500 underline">
           ← Мої вечірки
-        </a>
+        </Link>
         {error && <p role="alert" className="text-red-600">{error}</p>}
 
         <h1 className="text-2xl font-semibold">{party.name as string}</h1>
@@ -43,6 +46,8 @@ export default async function PartyPage({
             agent_status: party.agent_status as string,
             agent_error: (party.agent_error as string | null) ?? null,
             join_code: party.join_code as string,
+            mode: party.mode as "SHOPPING" | "DINNER" | "EVENT",
+            budget_uah: party.budget_uah == null ? null : Number(party.budget_uah),
           }}
           initialMembers={members as never[]}
           initialMessages={messages as never[]}
@@ -51,6 +56,8 @@ export default async function PartyPage({
             total_uah: (cart.total_uah as number | null) ?? null,
             checkout_url: (cart.checkout_url as string | null) ?? null,
             items: (cart.items ?? []) as never[],
+            recipes: (cart.recipes ?? []) as never[],
+            memberTotals: (cart.memberTotals ?? []) as never[],
           }}
         />
       </main>
@@ -61,9 +68,9 @@ export default async function PartyPage({
         <main className="grid min-h-screen place-items-center p-6 text-center">
           <div className="space-y-2">
             <p>Немає доступу до цієї вечірки ({caught.code}).</p>
-            <a href="/" className="underline">
+            <Link href="/" className="underline">
               ← Мої вечірки
-            </a>
+            </Link>
           </div>
         </main>
       );

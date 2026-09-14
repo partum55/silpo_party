@@ -18,6 +18,7 @@ import {
 
 export type PartyPlanningState = {
   request: string;
+  mode: "SHOPPING" | "DINNER" | "EVENT";
   currentParty: NormalizedPartyPlanningInput["currentParty"];
   participantCount: number;
   budgetUah: number | null;
@@ -85,9 +86,10 @@ export function createInitialState(value: PartyPlanningInput): PartyPlanningStat
   const input = partyPlanningInputSchema.parse(value);
   return {
     request: input.request,
+    mode: input.mode,
     currentParty: input.currentParty,
     participantCount: input.currentParty.members.length,
-    budgetUah: null,
+    budgetUah: input.budgetUah,
     restrictions: [],
     currentPlan: null,
     wishCandidates: [],
@@ -121,10 +123,30 @@ export function applyGatheredContext(
   return {
     ...state,
     participantCount,
-    budgetUah: context.budgetUah,
+    budgetUah: state.budgetUah ?? context.budgetUah,
     restrictions: [...new Set(context.partyWideRestrictions)],
     warnings,
   };
+}
+
+const participantWords = new Map<string, number>([
+  ["one", 1], ["two", 2], ["three", 3], ["four", 4], ["five", 5],
+  ["six", 6], ["seven", 7], ["eight", 8], ["nine", 9], ["ten", 10],
+  ["одного", 1], ["одну", 1], ["двох", 2], ["трьох", 3], ["чотирьох", 4],
+  ["п'ятьох", 5], ["п’ятьох", 5], ["шістьох", 6], ["сімох", 7], ["вісьмох", 8],
+  ["дев'ятьох", 9], ["дев’ятьох", 9], ["десятьох", 10],
+]);
+
+/** Extracts an explicitly phrased event headcount without mistaking product quantities for people. */
+export function mentionedParticipantCount(message: string): number | null {
+  const token = String.raw`(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|одного|одну|двох|трьох|чотирьох|п['’]ятьох|шістьох|сімох|вісьмох|дев['’]ятьох|десятьох)`;
+  const contextual = new RegExp(String.raw`(?:^|\s)(?:for|на|для)\s+(${token})(?=\s*(?:$|[,.;!?]|а(?:\s|$)|і(?:\s|$)|й(?:\s|$)|та(?:\s|$)|people(?:\s|$)|persons?(?:\s|$)|guests?(?:\s|$)|люд(?:ей|ини)(?:\s|$)|ос(?:іб|обу)(?:\s|$)|учасник(?:ів|и)?(?:\s|$)))`, "iu");
+  const suffixed = new RegExp(String.raw`(${token})\s*(?:people|persons?|guests?|людей|особи|осіб|учасники|учасників)(?=\s|$|[,.;!?])`, "iu");
+  const match = message.match(contextual) ?? message.match(suffixed);
+  if (!match) return null;
+  const normalized = match[1].toLocaleLowerCase("uk");
+  const numeric = Number(normalized);
+  return Number.isInteger(numeric) ? numeric : (participantWords.get(normalized) ?? null);
 }
 
 export async function runPlanningLoop(
@@ -134,6 +156,7 @@ export async function runPlanningLoop(
     hydrate: (productId: string) => Promise<HydratedProduct | null>;
     resolveRecipe?: (query: string) => Promise<FoundRecipe | null>;
     postValidate?: (draft: PartyPlanDraft | null) => Blocker[];
+    maxRepairAttempts?: number;
   },
 ): Promise<PartyPlanningState> {
   let state: PartyPlanningState = {
@@ -151,7 +174,10 @@ export async function runPlanningLoop(
     };
   }
 
-  for (let attempt = 0; attempt <= 2; attempt += 1) {
+  const contextualWarnings = state.warnings.filter((warning) => warning.code === "participant_count_conflict");
+
+  const maxRepairAttempts = dependencies.maxRepairAttempts ?? 2;
+  for (let attempt = 0; attempt <= maxRepairAttempts; attempt += 1) {
     state.participantCount = state.currentParty.members.length;
     const proposal = await dependencies.plan({ state, previousBlockers: state.blockers });
     const result = await validateProposal({
@@ -162,6 +188,7 @@ export async function runPlanningLoop(
       hydrate: dependencies.hydrate,
       resolveRecipe: dependencies.resolveRecipe,
       wishCandidates: state.wishCandidates,
+      mode: state.mode,
     });
     const blockers = [...result.blockers, ...(dependencies.postValidate?.(result.draft) ?? [])];
     state = {
@@ -170,7 +197,7 @@ export async function runPlanningLoop(
       currentPlan: result.draft,
       selectedProducts: result.selectedProducts,
       blockers,
-      warnings: result.warnings,
+      warnings: [...contextualWarnings, ...result.warnings],
       questions: [],
       readiness: blockers.length ? "invalid" : "ready",
       preferencePhase: getPreferencePhase(state.currentParty),

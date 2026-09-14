@@ -5,6 +5,8 @@ import { createSilpoGateway, extractCheckoutUrl, type CartLineItem } from "@silp
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { assertOk, checkFinalize, checkRead } from "@/lib/party/rules";
 import { getMembership, getPartyRow, type Db } from "@/lib/party/access";
+import { calculateMemberTotals, type CostMode } from "@/lib/cart/costs";
+import { formatUnknownError } from "@/lib/errors";
 
 type PlanProduct = {
   id: string;
@@ -13,23 +15,36 @@ type PlanProduct = {
   name: string;
   priceUah: number;
   quantity: number;
+  assignedMemberIds: string[];
+  lineTotalUah?: number;
 };
 
-type PlanDraft = { products: PlanProduct[]; totalUah: number } | null;
+type PlanDraft = {
+  products: PlanProduct[];
+  totalUah: number;
+  recipes?: Array<{ title: string; sourceUrl: string | null; steps: string[]; assignedMemberIds: string[] }>;
+} | null;
 
 /** Replaces cart_items with the derived projection of plan.products, and stores the raw plan for continuity. */
 export async function syncCartFromPlan(db: Db, partyId: string, plan: PlanDraft) {
   const { error: deleteError } = await db.from("cart_items").delete().eq("party_id", partyId);
   if (deleteError) throw deleteError;
 
-  const items = (plan?.products ?? []).map((product) => ({
-    party_id: partyId,
-    product_id: product.lookupProductId ?? product.id,
-    company_id: product.companyId ?? "",
-    name: product.name,
-    price_uah: product.priceUah,
-    quantity: product.quantity,
-  }));
+  const grouped = new Map<string, { party_id: string; product_id: string; company_id: string; name: string; price_uah: number; quantity: number }>();
+  for (const product of plan?.products ?? []) {
+    const productId = product.lookupProductId ?? product.id;
+    const existing = grouped.get(productId);
+    if (existing) existing.quantity += product.quantity;
+    else grouped.set(productId, {
+      party_id: partyId,
+      product_id: productId,
+      company_id: product.companyId ?? "",
+      name: product.name,
+      price_uah: product.priceUah,
+      quantity: product.quantity,
+    });
+  }
+  const items = [...grouped.values()];
   if (items.length) {
     const { error: insertError } = await db.from("cart_items").insert(items);
     if (insertError) throw insertError;
@@ -48,13 +63,28 @@ export async function getCart(partyId: string, userId: string) {
   const party = await getPartyRow(db, partyId);
   assertOk(checkRead({ isMember: Boolean(role), partyStatus: (party?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null }));
 
-  const [{ data: cart, error: cartError }, { data: items, error: itemsError }] = await Promise.all([
+  const [{ data: cart, error: cartError }, { data: items, error: itemsError }, { data: members, error: membersError }] = await Promise.all([
     db.from("carts").select("*").eq("party_id", partyId).maybeSingle(),
     db.from("cart_items").select("*").eq("party_id", partyId).order("added_at", { ascending: true }),
+    db.from("party_members").select("user_id").eq("party_id", partyId).order("joined_at", { ascending: true }),
   ]);
   if (cartError) throw cartError;
   if (itemsError) throw itemsError;
-  return { ...cart, items: items ?? [] };
+  if (membersError) throw membersError;
+  const memberIds = (members ?? []).map((member) => member.user_id as string);
+  const plan = cart?.plan as PlanDraft;
+  const totalUah = Number(cart?.total_uah ?? 0);
+  return {
+    ...cart,
+    items: items ?? [],
+    recipes: plan?.recipes ?? [],
+    memberTotals: calculateMemberTotals(
+      party!.mode as CostMode,
+      totalUah,
+      memberIds,
+      plan?.products ?? [],
+    ),
+  };
 }
 
 export type FinalizeResult =
@@ -138,7 +168,7 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
 
     return { ok: true, checkoutUrl, droppedItems };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUnknownError(error);
     await db.from("parties").update({ agent_status: "ERROR", agent_error: message }).eq("id", partyId);
     return { ok: false, error: message };
   }
