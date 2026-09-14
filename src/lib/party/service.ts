@@ -102,7 +102,7 @@ export async function listMembers(partyId: string, userId: string) {
   assertOk(checkRead({ isMember: Boolean(role), partyStatus: status }));
   const { data, error } = await db
     .from("party_members")
-    .select("user_id, role, joined_at, wishes")
+    .select("user_id, role, joined_at, wishes, ready")
     .eq("party_id", partyId)
     .order("joined_at", { ascending: true });
   if (error) throw error;
@@ -112,6 +112,16 @@ export async function listMembers(partyId: string, userId: string) {
     ...row,
     ...(identities.get(row.user_id as string) ?? { name: "Учасник", avatarUrl: null }),
   }));
+}
+
+/** Self-service only: a member marks their own readiness. Purely a UX signal — never gates finalize. */
+export async function setMemberReady(partyId: string, userId: string, ready: boolean) {
+  const db = createSupabaseAdminClient();
+  const status = await getPartyStatus(db, partyId);
+  const role = await getMembership(db, partyId, userId);
+  assertOk(checkActiveMemberAction({ isMember: Boolean(role), partyStatus: status }));
+  const { error } = await db.from("party_members").update({ ready }).eq("party_id", partyId).eq("user_id", userId);
+  if (error) throw error;
 }
 
 export async function joinPartyByCode(joinCode: string, userId: string) {

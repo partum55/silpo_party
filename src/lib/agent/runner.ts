@@ -86,7 +86,7 @@ export async function runConversationalTurn(db: Db, {
         questions: [],
         readiness: "invalid",
       },
-      requestContext: { silpoUserId: creatorId },
+      requestContext: { silpoUserId: creatorId, partyId },
     }),
     signal: AbortSignal.timeout(AGENT_TURN_TIMEOUT_MS),
   });

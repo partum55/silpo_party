@@ -17,7 +17,7 @@ import { Button, SubmitButton } from "@/components/ui/button";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { ModeBadge } from "@/components/ui/mode-badge";
 import { TabBar } from "@/components/ui/tab-bar";
-import { ChatIcon, ListIcon } from "@/components/ui/icons";
+import { ChatIcon, CheckIcon, ListIcon } from "@/components/ui/icons";
 
 // Everything on this page that can change without this viewer doing anything — a message from someone else,
 // the agent's reply, its status ticking over, a member joining/leaving, the cart being rebuilt — arrives
@@ -54,6 +54,8 @@ export function PartyLive({
   const [cart, setCart] = useState(initialCart);
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
+  const [togglingReady, setTogglingReady] = useState(false);
+  const [readyError, setReadyError] = useState<string | null>(null);
   const [tab, setTab] = useState<"chat" | "plan">(initialTab);
   const listRef = useRef<HTMLDivElement>(null);
   const lastAgentStatusRef = useRef(initialParty.agent_status);
@@ -192,8 +194,28 @@ export function PartyLive({
     }
   }
 
+  async function toggleReady(ready: boolean) {
+    if (togglingReady) return;
+    setTogglingReady(true);
+    setReadyError(null);
+    try {
+      const response = await fetch(`/api/parties/${partyId}/members`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ready }),
+      });
+      if (!response.ok) throw new Error();
+      setMembers(await response.json() as Member[]);
+    } catch {
+      setReadyError("Не вдалося оновити статус. Спробуйте ще раз.");
+    } finally {
+      setTogglingReady(false);
+    }
+  }
+
   const isActive = party.status === "ACTIVE";
   const memberByUserId = new Map(members.map((member) => [member.user_id, member]));
+  const selfReady = memberByUserId.get(currentUserId)?.ready ?? false;
 
   return (
     <div className="mx-auto flex h-dvh w-full max-w-[26rem] flex-col sm:max-w-[30rem] md:max-w-[34rem]">
@@ -267,19 +289,46 @@ export function PartyLive({
       </div>
 
       {tab === "chat" && isActive && (
-        <form onSubmit={send} noValidate className="flex shrink-0 gap-2 border-t border-stone bg-paper-raised px-3 py-2.5">
-          <input
-            value={content}
-            onChange={(event) => setContent(event.target.value)}
-            placeholder={MODE_COPY[party.mode].placeholder}
-            required
-            disabled={sending}
-            className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-stone bg-paper px-3 py-2 text-[0.95rem] disabled:opacity-50"
-          />
-          <Button type="submit" disabled={sending} size="sm" className="px-4">
-            {sending ? "…" : "Надіслати"}
-          </Button>
-        </form>
+        <div className="shrink-0 border-t border-stone bg-paper-raised px-3 py-2.5">
+          {selfReady ? (
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-sm text-ink-soft">
+                <CheckIcon className="h-4 w-4 text-basil" />
+                Ви позначили, що готові
+              </span>
+              <Button type="button" variant="secondary" size="sm" disabled={togglingReady} onClick={() => void toggleReady(false)}>
+                {togglingReady ? "…" : "Ще щось написати"}
+              </Button>
+            </div>
+          ) : (
+            <>
+              <label className="mb-1.5 flex w-fit items-center gap-1.5 text-xs text-ink-soft">
+                <input
+                  type="checkbox"
+                  checked={false}
+                  disabled={togglingReady}
+                  onChange={() => void toggleReady(true)}
+                  className="h-3.5 w-3.5 rounded border-stone accent-basil"
+                />
+                Я готовий(-а) — більше нічого не пишу
+              </label>
+              <form onSubmit={send} noValidate className="flex gap-2">
+                <input
+                  value={content}
+                  onChange={(event) => setContent(event.target.value)}
+                  placeholder={MODE_COPY[party.mode].placeholder}
+                  required
+                  disabled={sending}
+                  className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-stone bg-paper px-3 py-2 text-[0.95rem] disabled:opacity-50"
+                />
+                <Button type="submit" disabled={sending} size="sm" className="px-4">
+                  {sending ? "…" : "Надіслати"}
+                </Button>
+              </form>
+            </>
+          )}
+          {readyError && <p className="mt-1.5 text-xs text-danger" role="alert">{readyError}</p>}
+        </div>
       )}
 
       <TabBar

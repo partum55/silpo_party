@@ -16,6 +16,7 @@ export type Member = {
   name: string;
   avatarUrl: string | null;
   wishes: Array<{ id: string; text: string; fulfillmentStrategy: "ready_made" | "recipe" | "either" }>;
+  ready: boolean;
 };
 
 export type CartItem = {
