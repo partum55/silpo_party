@@ -224,9 +224,19 @@ Respect the supplied scope.\n${JSON.stringify({ message: inputData.message, acto
             `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "quantity": number, "assignedMemberIds": string[], "reason": string}], "recipes": [{"title": string, "source": "web"|"generated", "sourceUrl": string|null, "servings": number, "assignedMemberIds": string[], "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece", "productId": string}], "steps": string[]}], "wishFulfillments": [{"memberId": string, "wishId": string, "resolvedStrategy": "ready_made"|"recipe", "selectedProductIds": string[], "recipeTitle": string|null, "fallbackReason": "explicit_cooking"|"no_candidates"|"no_safe_candidate"|"poor_match"|null}]}. Always include all three arrays, even if empty. Do not rename fields, omit fields, or add other keys — every selections/recipes item needs every listed field. Modify only components required by the explicit operations or deterministic blockers below; preserve every unaffected product, recipe, assignment, quantity, and wish fulfillment shown in currentProposal exactly. Never change member status. Use the supplied hydrated wish candidates for wish products; use Silpo tools for direct host additions/replacements and recipe ingredients.\n${JSON.stringify({ message: inputData.message, decision, currentParty: applied.party, currentProposal: working, wishCandidates, blockers: previousBlockers })}`,
             { maxSteps: 20, requestContext },
           );
+          let proposed;
+          try {
+            proposed = parsePlannerProposal(response.text);
+          } catch (error) {
+            // An empty proposal fails deterministic validation just like a genuinely bad plan would, so it
+            // naturally feeds runPlanningLoop's existing repair-retry loop instead of throwing out to the
+            // outer catch (which gives up on the whole turn) on one malformed response.
+            console.error("conversationalTurn: failed to parse planner proposal", error);
+            proposed = { summary: "", selections: [], recipes: [], wishFulfillments: [] };
+          }
           working = mergeWithProtectedPlan({
             baseline,
-            proposed: parsePlannerProposal(response.text),
+            proposed,
             currentPlan: recovered.plan,
             affectedWishKeys: applied.affectedWishKeys,
             planOperations: decision.planOperations,

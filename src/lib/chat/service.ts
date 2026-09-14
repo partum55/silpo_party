@@ -41,12 +41,17 @@ export async function sendMessage(partyId: string, userId: string, content: stri
   return message;
 }
 
+// Longer than the routes' own maxDuration (300s) so a function that's still legitimately running never gets
+// its lock stolen out from under it — only one that the platform actually killed can look stale this long.
+const STALE_LOCK_MINUTES = 6;
+
 async function tryAcquireAgentLock(db: Db, partyId: string) {
+  const staleBefore = new Date(Date.now() - STALE_LOCK_MINUTES * 60_000).toISOString();
   const { data, error } = await db
     .from("parties")
     .update({ agent_status: "THINKING", agent_error: null })
     .eq("id", partyId)
-    .in("agent_status", ["IDLE", "DONE", "ERROR"])
+    .or(`agent_status.in.(IDLE,DONE,ERROR),and(agent_status.in.(THINKING,UPDATING_CART),updated_at.lt.${staleBefore})`)
     .select("id")
     .maybeSingle();
   if (error) throw error;

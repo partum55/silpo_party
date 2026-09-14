@@ -151,11 +151,17 @@ const gatherContext = createStep({
   execute: async ({ inputData, requestContext }) => {
     let next = createInitialState(inputData);
     if (next.participantCount) {
-      const response = await partyPlannerAgent.generate(
-        `Return JSON with exactly these keys: {"budgetUah": number|null, "partyWideRestrictions": string[], "participantCountMentioned": number|null}. Do not plan products or add other keys.\n\nParty request:\n${inputData.request}`,
-        { structuredOutput: { schema: gatheredContextSchema }, requestContext },
-      );
-      next = applyGatheredContext(next, response.object);
+      try {
+        const response = await partyPlannerAgent.generate(
+          `Return JSON with exactly these keys: {"budgetUah": number|null, "partyWideRestrictions": string[], "participantCountMentioned": number|null}. Do not plan products or add other keys.\n\nParty request:\n${inputData.request}`,
+          { structuredOutput: { schema: gatheredContextSchema }, requestContext },
+        );
+        if (response.object) next = applyGatheredContext(next, response.object);
+      } catch (error) {
+        // Soft budget/restriction extraction is optional context, not a hard requirement — degrade to the
+        // party's own explicit member data (no gathered budget/restrictions) rather than crash the run.
+        console.error("gatherContext: failed, proceeding without gathered budget/restrictions", error);
+      }
     }
     return next;
   },
@@ -172,14 +178,21 @@ const discoverCandidates = createStep({
       .map((wish) => ({ memberId: member.id, wishId: wish.id, text: wish.text })));
     if (!searchableWishes.length) return inputData;
 
-    const response = await partyPlannerAgent.generate(
-      `Return a JSON object with, for each wish, up to two short Silpo catalog search query variants. Use general food/product wording and never name or invent SKUs. Return every supplied memberId and wishId unchanged.\n\n${JSON.stringify(searchableWishes)}`,
-      { structuredOutput: { schema: wishQueryVariantsSchema }, requestContext },
-    );
-    const validKeys = new Set(searchableWishes.map((wish) => `${wish.memberId}:${wish.wishId}`));
-    const queryVariants = Object.fromEntries(response.object.wishes
-      .filter((wish) => validKeys.has(`${wish.memberId}:${wish.wishId}`))
-      .map((wish) => [`${wish.memberId}:${wish.wishId}`, wish.queries]));
+    let queryVariants: Record<string, string[]> = {};
+    try {
+      const response = await partyPlannerAgent.generate(
+        `Return a JSON object with, for each wish, up to two short Silpo catalog search query variants. Use general food/product wording and never name or invent SKUs. Return every supplied memberId and wishId unchanged.\n\n${JSON.stringify(searchableWishes)}`,
+        { structuredOutput: { schema: wishQueryVariantsSchema }, requestContext },
+      );
+      const validKeys = new Set(searchableWishes.map((wish) => `${wish.memberId}:${wish.wishId}`));
+      queryVariants = Object.fromEntries((response.object?.wishes ?? [])
+        .filter((wish) => validKeys.has(`${wish.memberId}:${wish.wishId}`))
+        .map((wish) => [`${wish.memberId}:${wish.wishId}`, wish.queries]));
+    } catch (error) {
+      // discoverWishCandidates falls back to each wish's own text when no variant is supplied — degrading to
+      // {} is safe, better than crashing the whole run over an optional search-quality improvement.
+      console.error("discoverCandidates: failed, falling back to each wish's own text", error);
+    }
     const silpo = createSilpoGateway(silpoUserId(requestContext));
     return {
       ...inputData,
@@ -218,7 +231,15 @@ Deterministic validation failures from the previous attempt:
 ${JSON.stringify(previousBlockers)}`,
           { maxSteps: 20, requestContext },
         );
-        return parsePlannerProposal(response.text);
+        try {
+          return parsePlannerProposal(response.text);
+        } catch (error) {
+          // An empty proposal fails deterministic validation (e.g. no_suitable_products) exactly like a
+          // genuinely bad plan would, so it naturally feeds the existing repair-retry loop instead of
+          // crashing the whole run on one malformed response.
+          console.error("planAndValidate: failed to parse planner proposal", error);
+          return { summary: "", selections: [], recipes: [], wishFulfillments: [] };
+        }
       },
       hydrate: (productId) => silpo!.hydrate(productId),
       resolveRecipe: findRecipe,
