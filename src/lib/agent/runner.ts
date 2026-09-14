@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createSilpoGateway } from "@silpo-party/agent/gateway";
+
 import { env } from "@/lib/env";
 import type { Db } from "@/lib/party/access";
 
@@ -8,15 +10,14 @@ export const AGENT_TURN_TIMEOUT_MS = 90_000;
 async function loadPartyMembers(db: Db, partyId: string) {
   const { data, error } = await db.from("party_members").select("user_id, wishes").eq("party_id", partyId);
   if (error) throw error;
-  return (data ?? []).map((row) => ({
+  return Promise.all((data ?? []).map(async (row) => ({
     id: row.user_id as string,
-    restrictions: [] as string[],
-    // ponytail: per-member wish lists are not persisted across chat turns (no dedicated table) — only the
-    // resulting cart plan is. This loses cross-turn wish-based re-planning nuance; add a wishes table and
-    // hydrate it here if that nuance is ever needed.
+    // Silpo owns this profile setting. Refresh it for every turn so a newly changed restriction applies
+    // immediately and remains participant-specific in shared plans.
+    restrictions: await createSilpoGateway(row.user_id as string).getFoodRestrictions(),
     wishes: (Array.isArray(row.wishes) ? row.wishes : []) as never[],
     status: "collecting" as const,
-  }));
+  })));
 }
 
 async function loadPartySettings(db: Db, partyId: string) {

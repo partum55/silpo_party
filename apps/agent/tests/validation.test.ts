@@ -121,6 +121,26 @@ const products: Record<string, HydratedProduct> = {
     packageSize: { amount: 750, unit: "ml" },
     metadata: { ingredients: [], allergens: [], labels: [], composition: [] },
   },
+  milk: {
+    id: "milk",
+    name: "Молоко 2,5% 900 мл",
+    priceUah: 48,
+    unit: "шт",
+    available: true,
+    category: "food",
+    packageSize: { amount: 900, unit: "ml" },
+    metadata: { ingredients: ["молоко коров'яче"], allergens: ["молоко"], labels: [] },
+  },
+  lactoseFreeMilk: {
+    id: "lactoseFreeMilk",
+    name: "Молоко безлактозне 2,5% 900 мл",
+    priceUah: 58,
+    unit: "шт",
+    available: true,
+    category: "food",
+    packageSize: { amount: 900, unit: "ml" },
+    metadata: { ingredients: ["молоко коров'яче"], allergens: ["молоко"], labels: [] },
+  },
 };
 
 function proposal(selections: PlannerProposal["selections"]): PlannerProposal {
@@ -192,10 +212,10 @@ test("unknown restriction evidence cannot count toward coverage", async () => {
     budgetUah: null,
     partyWideRestrictions: [],
     proposal: proposal([
-      { productId: "vegetables", quantity: 1, assignedMemberIds: ["a"], reason: "Food" },
-      { productId: "juice", quantity: 1, assignedMemberIds: ["a"], reason: "Drinks" },
+      { productId: "ambiguous", quantity: 1, assignedMemberIds: ["a"], reason: "Food" },
     ]),
     hydrate,
+    targets: { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 },
   });
 
   assert.equal(result.readiness, "invalid");
@@ -274,6 +294,95 @@ test("obvious meat is unsafe only for the restricted participant", async () => {
   assert.deepEqual(result.coverage.b, { foodGrams: 400, drinkMilliliters: 750 });
   assert.ok(result.blockers.some((blocker) => blocker.code === "restriction_violation" && blocker.memberId === "a"));
   assert.ok(result.blockers.every((blocker) => blocker.memberId !== "b"));
+});
+
+test("applies common Silpo restrictions to ingredients and explicit free-from labels", async () => {
+  const cases = [
+    { restriction: "egg allergy", unsafe: "яйця", safe: "без яєць" },
+    { restriction: "Без сої", unsafe: "соєвий білок", safe: "без сої" },
+    { restriction: "sesame allergy", unsafe: "sesame seeds", safe: "sesame-free" },
+    { restriction: "Без цукру", unsafe: "цукор", safe: "без доданого цукру" },
+    { restriction: "no alcohol", unsafe: "етиловий спирт", safe: "безалкогольний" },
+  ];
+
+  for (const [index, item] of cases.entries()) {
+    const unsafeId = `restricted-${index}`;
+    const safeId = `free-from-${index}`;
+    products[unsafeId] = {
+      ...products.ambiguous,
+      id: unsafeId,
+      name: `Restricted product ${index}`,
+      metadata: { ingredients: [item.unsafe], allergens: [], labels: [] },
+    };
+    products[safeId] = {
+      ...products.ambiguous,
+      id: safeId,
+      name: `Safe product ${index}`,
+      metadata: { ingredients: [item.unsafe], allergens: [], labels: [item.safe] },
+    };
+    const restrictedInput: PartyPlanningInput = {
+      request: "Add product",
+      currentParty: { members: [{ id: "a", restrictions: [item.restriction] }] },
+    };
+    const unsafe = await validateProposal({
+      input: restrictedInput,
+      budgetUah: null,
+      partyWideRestrictions: [],
+      proposal: proposal([{ productId: unsafeId, quantity: 1, assignedMemberIds: ["a"], reason: "Product" }]),
+      hydrate,
+      targets: { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 },
+    });
+    const safe = await validateProposal({
+      input: restrictedInput,
+      budgetUah: null,
+      partyWideRestrictions: [],
+      proposal: proposal([{ productId: safeId, quantity: 1, assignedMemberIds: ["a"], reason: "Product" }]),
+      hydrate,
+      targets: { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 },
+    });
+
+    assert.ok(unsafe.blockers.some((blocker) => blocker.code === "restriction_violation"), item.restriction);
+    assert.equal(safe.readiness, "ready", item.restriction);
+  }
+});
+
+test("unknown Silpo restrictions fail closed unless the product explicitly matches them", async () => {
+  const result = await validateProposal({
+    input: { request: "Add snack", currentParty: { members: [{ id: "a", restrictions: ["special-profile-diet"] }] } },
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([{ productId: "vegetables", quantity: 1, assignedMemberIds: ["a"], reason: "Food" }]),
+    hydrate,
+    targets: { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 },
+  });
+
+  assert.ok(result.blockers.some((blocker) => blocker.code === "restriction_unverified"));
+});
+
+test("a lactose restriction rejects regular milk and accepts lactose-free milk", async () => {
+  const restrictedInput: PartyPlanningInput = {
+    request: "Add milk",
+    currentParty: { members: [{ id: "a", restrictions: ["Без лактози"] }] },
+  };
+  const regular = await validateProposal({
+    input: restrictedInput,
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([{ productId: "milk", quantity: 1, assignedMemberIds: ["a"], reason: "Milk" }]),
+    hydrate,
+    targets: { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 },
+  });
+  const lactoseFree = await validateProposal({
+    input: restrictedInput,
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([{ productId: "lactoseFreeMilk", quantity: 1, assignedMemberIds: ["a"], reason: "Milk" }]),
+    hydrate,
+    targets: { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 },
+  });
+
+  assert.ok(regular.blockers.some((blocker) => blocker.code === "restriction_violation"));
+  assert.equal(lactoseFree.readiness, "ready");
 });
 
 test("ambiguous processed food without evidence remains unverified", async () => {

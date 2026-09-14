@@ -96,6 +96,47 @@ const wholePlant = /tomato|potato|cucumber|carrot|cabbage|pepper|onion|garlic|ap
 const processedFood = /закуск|салат|соус|піца|сендвіч|бургер|торт|печив|цукерк|десерт|йогурт|чипс|паста|марин|консерв|напівфабрикат|snack|salad|sauce|pizza|sandwich|burger|cake|cookie|candy|dessert|yogurt|chips|flavou?r/;
 const leafyProduce = /листов|зелень|рукол|шпинат|leafy|greens|arugula|spinach/;
 
+type IngredientRestrictionRule = {
+  restriction: RegExp;
+  forbidden: RegExp;
+  explicitlySafe: RegExp;
+};
+
+// Covers the common dietary exclusions and the major food-allergen families returned by Silpo. These are
+// deliberately stem-based because profile values and catalog attributes may independently be Ukrainian or
+// English and use different grammatical forms.
+const ingredientRestrictionRules: IngredientRestrictionRule[] = [
+  { restriction: /lactose|лактоз/, forbidden: /lactose|лактоз|milk|cream|молок|вершк/, explicitlySafe: /lactose[- ]?free|без\s*лактоз|безлактоз/ },
+  { restriction: /gluten|глютен|celiac|целіак/, forbidden: /gluten|wheat|barley|rye|spelt|пшениц|ячмін|жит(?:о|н)|полб/, explicitlySafe: /gluten[- ]?free|без\s*глютен|безглютен/ },
+  { restriction: /peanut|арахіс/, forbidden: /peanut|groundnut|арахіс/, explicitlySafe: /peanut[- ]?free|без\s*арахіс/ },
+  { restriction: /tree nuts?|горіх|мигдал|фундук|кеш['’]?ю|фісташ/, forbidden: /tree nuts?|nut|almond|hazelnut|cashew|pistachio|walnut|pecan|macadamia|горіх|мигдал|фундук|кеш['’]?ю|фісташ|пекан|макадам/, explicitlySafe: /nut[- ]?free|без\s*горіх/ },
+  { restriction: /milk allergy|dairy|алерг\S*.*молок|молочн\S*.*алерг/, forbidden: /milk|cream|butter|whey|casein|cheese|yogurt|молок|вершк|масло|сироват|казеїн|сир|йогурт/, explicitlySafe: /dairy[- ]?free|milk[- ]?free|без\s*молочн|без\s*молок/ },
+  { restriction: /eggs?|яйц/, forbidden: /eggs?|albumen|ovalbumin|яйц|альбумін/, explicitlySafe: /egg[- ]?free|без\s*яєць|без\s*яйц/ },
+  { restriction: /soy|soya|со[єїй]/, forbidden: /soy|soya|со[єїй]/, explicitlySafe: /soy[- ]?free|без\s*со[їєй]/ },
+  { restriction: /sesame|кунжут/, forbidden: /sesame|tahini|кунжут|тахін/, explicitlySafe: /sesame[- ]?free|без\s*кунжут/ },
+  { restriction: /mustard|гірчиц/, forbidden: /mustard|гірчиц/, explicitlySafe: /mustard[- ]?free|без\s*гірчиц/ },
+  { restriction: /celery|селер/, forbidden: /celery|селер/, explicitlySafe: /celery[- ]?free|без\s*селер/ },
+  { restriction: /lupin|люпин/, forbidden: /lupin|люпин/, explicitlySafe: /lupin[- ]?free|без\s*люпин/ },
+  { restriction: /fish|риб/, forbidden: /fish|salmon|tuna|anchov|caviar|риб|лосос|тунц|анчоус|ікра/, explicitlySafe: /fish[- ]?free|без\s*риб/ },
+  { restriction: /shellfish|seafood|crustacean|mollusc|морепродукт|ракоподіб|молюск|кревет/, forbidden: /shellfish|seafood|shrimp|prawn|crab|lobster|mussel|oyster|squid|морепродукт|кревет|краб|омар|міді|устриц|кальмар/, explicitlySafe: /shellfish[- ]?free|seafood[- ]?free|без\s*морепродукт/ },
+  { restriction: /sulphite|sulfite|діоксид сірки|сульфіт/, forbidden: /sulphite|sulfite|sulfur dioxide|e22[0-8]|діоксид сірки|сульфіт/, explicitlySafe: /sulphite[- ]?free|sulfite[- ]?free|без\s*сульфіт/ },
+  { restriction: /sugar|цукр|без солодк/, forbidden: /sugar|sucrose|glucose|fructose|syrup|цукор|цукр|сахароз|глюкоз|фруктоз|сироп/, explicitlySafe: /sugar[- ]?free|no added sugar|без\s*(?:доданого\s*)?цукр|безцукр/ },
+  { restriction: /alcohol|алкогол/, forbidden: /alcohol|ethanol|beer|wine|rum|brandy|liqueur|алкогол|етанол|спирт|пиво|вин[оа]|ром|бренді|лікер/, explicitlySafe: /alcohol[- ]?free|non[- ]?alcoholic|безалкогол/ },
+  { restriction: /caffeine|кофеїн/, forbidden: /caffeine|coffee|кофеїн|кав[аи]/, explicitlySafe: /caffeine[- ]?free|decaf|без\s*кофеїн|безкофеїн/ },
+  { restriction: /pork|свинин|без м['’]?яса свин/, forbidden: /pork|bacon|ham|lard|свинин|бекон|шинка|смалец/, explicitlySafe: /pork[- ]?free|без\s*свинин/ },
+  { restriction: /beef|ялович/, forbidden: /beef|veal|ялович|телятин/, explicitlySafe: /beef[- ]?free|без\s*ялович/ },
+  { restriction: /salt|sodium|сіль|натрі/, forbidden: /salt|sodium|сіль|натрі/, explicitlySafe: /salt[- ]?free|sodium[- ]?free|без\s*солі|безсольов/ },
+];
+
+function hasReadableComposition(ingredients: string, allergens: string) {
+  return Boolean(ingredients || allergens);
+}
+
+function isObviouslyUnaffectedWholeFood(product: HydratedProduct, name: string) {
+  return /(^|\s)(water|вода)(\s|$)/.test(name)
+    || (product.category === "food" && wholePlant.test(name) && !processedFood.test(name));
+}
+
 function restrictionSafety(product: HydratedProduct, restriction: string): RestrictionResult {
   const value = restriction.toLocaleLowerCase("uk");
   const ingredients = normalize([
@@ -126,24 +167,35 @@ function restrictionSafety(product: HydratedProduct, restriction: string): Restr
       : "safe";
   }
 
-  if (value.match(/nut|горіх|арахіс/)) {
-    if (labels.match(/nut[- ]?free|без горіх|без арахіс/)) return "safe";
-    if (ingredients.match(/nut|peanut|almond|hazelnut|горіх|арахіс|мигдал|фундук/) || allergens.match(/nut|peanut|горіх|арахіс/)) return "unsafe";
+  if (value.match(/pescatar|пескетар/)) {
+    const landAnimal = /chicken|beef|pork|turkey|duck|meat|gelatin|lard|курк|ялович|свинин|індич|качк|м['’]?яс|желатин|смалец|бекон|шинка|ковбас|сосиск/;
+    if (landAnimal.test(`${ingredients} ${allergens} ${name}`)) return "unsafe";
+    if (/pescatar|пескетар/.test(`${name} ${labels}`) || hasReadableComposition(ingredients, allergens) || isObviouslyUnaffectedWholeFood(product, name)) return "safe";
     return "unknown";
   }
 
-  if (value.match(/gluten|глютен/)) {
-    if (labels.match(/gluten[- ]?free|без глютен/)) return "safe";
-    if (ingredients.match(/wheat|barley|rye|пшениц|ячмін|жито/) || allergens.match(/gluten|глютен/)) return "unsafe";
+  if (value.match(/halal|халяль/)) {
+    if (/halal|халяль/.test(`${name} ${labels}`)) return "safe";
+    if (/pork|bacon|ham|lard|alcohol|свинин|бекон|шинка|смалец|алкогол|спирт/.test(`${ingredients} ${allergens} ${name}`)) return "unsafe";
     return "unknown";
   }
 
-  if (value.match(/lactose|лактоз/)) {
-    if (labels.match(/lactose[- ]?free|без лактоз/)) return "safe";
-    if (ingredients.match(/milk|cream|молок|вершк/) || allergens.match(/milk|молок/)) return "unsafe";
+  if (value.match(/kosher|кошер/)) {
+    if (/kosher|кошер/.test(`${name} ${labels}`)) return "safe";
+    if (/pork|bacon|ham|lard|shellfish|shrimp|crab|свинин|бекон|шинка|смалец|кревет|краб/.test(`${ingredients} ${allergens} ${name}`)) return "unsafe";
     return "unknown";
   }
 
+  const rule = ingredientRestrictionRules.find((candidate) => candidate.restriction.test(value));
+  if (rule) {
+    if (rule.explicitlySafe.test(`${name} ${labels}`)) return "safe";
+    if (rule.forbidden.test(`${ingredients} ${allergens}`)) return "unsafe";
+    if (hasReadableComposition(ingredients, allergens) || isObviouslyUnaffectedWholeFood(product, name)) return "safe";
+  }
+
+  // Unknown profile restrictions are never silently ignored. The planner may only use a product when its
+  // Silpo name/labels explicitly repeat that restriction; otherwise validation blocks the assignment.
+  if (labels.includes(value) || name.includes(value)) return "safe";
   return "unknown";
 }
 
