@@ -1,4 +1,5 @@
 import { Mastra } from "@mastra/core/mastra";
+import { SimpleAuth } from "@mastra/core/server";
 
 import { partyPlannerAgent } from "./party-planner-agent.ts";
 import { conversationalPartyWorkflow } from "./conversational-workflow.ts";
@@ -10,6 +11,11 @@ import {
   silpoGetSimilarProducts,
   silpoSearchProducts,
 } from "./tools/silpo-tools.ts";
+
+const internalToken = process.env.AGENT_INTERNAL_TOKEN;
+const internalUsers = internalToken
+  ? { [internalToken]: { id: "web-backend", name: "Silpo Party Studio", role: "admin" } }
+  : {};
 
 export const mastra = new Mastra({
   // A chat turn can chain several LLM calls plus Silpo MCP round-trips (schema discovery, cart context,
@@ -29,13 +35,10 @@ export const mastra = new Mastra({
     // Deployed standalone (see AGENT_URL in the root app), so every route needs a caller check: without this,
     // anyone with the deployment URL could run workflows with an arbitrary silpoUserId in requestContext and
     // act against a stranger's Silpo account. The root app sends this as a bearer token (see src/lib/agent/runner.ts).
-    auth: {
-      authenticateToken: async (token: string) => {
-        const expected = process.env.AGENT_INTERNAL_TOKEN;
-        if (!expected) throw new Error("Missing environment variable: AGENT_INTERNAL_TOKEN");
-        return token === expected ? { id: "web-backend" } : null;
-      },
-    },
+    // SimpleAuth still accepts the web backend's Authorization: Bearer token, while also exposing enough
+    // authentication capability metadata for Studio's auth_header token handoff to establish a user session.
+    // An absent token produces an empty allow-list, so a misconfigured deployment fails closed.
+    auth: new SimpleAuth({ tokens: internalUsers }),
   },
 });
 
