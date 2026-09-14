@@ -360,9 +360,11 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
       const warningText = result.warnings.map((warning) => warning.code === "budget_exceeded"
         ? `План перевищує бюджет на ${warning.amountUah ?? 0} грн.`
         : "Кількість людей у запиті не збігається зі складом вечірки; використано поточний список учасників.").join(" ");
+      const blockerText = result.blockers.slice(0, 2).map((blocker) => blocker.message).join(" ");
       return {
         responseText: [
-          result.readiness === "ready" ? "План вечірки оновлено." : "Чернетку оновлено, але деякі товари потребують уваги.",
+          result.readiness === "ready" ? "План вечірки оновлено." : "Чернетку не змінено, бо деякі товари потребують уваги.",
+          blockerText,
           warningText,
         ].filter(Boolean).join(" "),
         intent: decision.intent,
