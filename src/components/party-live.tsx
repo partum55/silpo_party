@@ -23,7 +23,7 @@ import { ChatIcon, CheckIcon, ListIcon } from "@/components/ui/icons";
 // the agent's reply, its status ticking over, a member joining/leaving, the cart being rebuilt — arrives
 // through one Supabase Realtime channel (RLS-scoped: only party members receive events) instead of requiring
 // a page refresh. A status poll acts as a reconnect fallback because a browser/network can close that channel.
-// party_members/carts/cart_items changes are refetched via the existing API routes rather
+// party_members/carts/cart_items/cart_item_subscribers changes are refetched via the existing API routes rather
 // than patched incrementally (simpler and safer given syncCartFromPlan replaces cart_items wholesale, which
 // would otherwise show up as a burst of individual delete+insert events); chat_messages and the parties row
 // itself are cheap to patch directly from the change payload.
@@ -32,6 +32,7 @@ export function PartyLive({
   partyName,
   currentUserId,
   isCreator,
+  initialTab,
   initialParty,
   initialMembers,
   initialMessages,
@@ -41,6 +42,7 @@ export function PartyLive({
   partyName: string;
   currentUserId: string;
   isCreator: boolean;
+  initialTab: "chat" | "plan";
   initialParty: PartyStatus;
   initialMembers: Member[];
   initialMessages: ChatMessage[];
@@ -54,7 +56,7 @@ export function PartyLive({
   const [sending, setSending] = useState(false);
   const [togglingReady, setTogglingReady] = useState(false);
   const [readyError, setReadyError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"chat" | "plan">("chat");
+  const [tab, setTab] = useState<"chat" | "plan">(initialTab);
   const listRef = useRef<HTMLDivElement>(null);
   const lastAgentStatusRef = useRef(initialParty.agent_status);
   const thinkingLabel = AGENT_THINKING_COPY[party.agent_status as AgentStatus];
@@ -129,6 +131,7 @@ export function PartyLive({
       .on("postgres_changes", { event: "*", schema: "public", table: "party_members", filter: `party_id=eq.${partyId}` }, refreshMembers)
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "carts", filter: `party_id=eq.${partyId}` }, refreshCart)
       .on("postgres_changes", { event: "*", schema: "public", table: "cart_items", filter: `party_id=eq.${partyId}` }, refreshCart)
+      .on("postgres_changes", { event: "*", schema: "public", table: "cart_item_subscribers", filter: `party_id=eq.${partyId}` }, refreshCart)
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "chat_messages", filter: `party_id=eq.${partyId}` },

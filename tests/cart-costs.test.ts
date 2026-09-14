@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { calculateMemberTotals } from "../src/lib/cart/costs.ts";
+import { calculateMemberTotals, mergePayerIds } from "../src/lib/cart/costs.ts";
 
 const products = [
   { priceUah: 90, quantity: 1, assignedMemberIds: ["a"] },
@@ -24,6 +24,19 @@ test("event cost is split equally down to the cent", () => {
     { memberId: "a", amountUah: 33.34 },
     { memberId: "b", amountUah: 33.33 },
     { memberId: "c", amountUah: 33.33 },
+  ]);
+});
+
+test("subscribers join existing payers without duplicate shares", () => {
+  assert.deepEqual(mergePayerIds(["a", "b"], ["b", "c"]), ["a", "b", "c"]);
+  assert.deepEqual(calculateMemberTotals("SHOPPING", 90, ["a", "b", "c"], [{
+    priceUah: 90,
+    quantity: 1,
+    assignedMemberIds: mergePayerIds(["a"], ["b", "c"]),
+  }]), [
+    { memberId: "a", amountUah: 30 },
+    { memberId: "b", amountUah: 30 },
+    { memberId: "c", amountUah: 30 },
   ]);
 });
 

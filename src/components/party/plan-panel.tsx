@@ -10,7 +10,7 @@ import { TornPanel } from "@/components/ui/panel";
 import { buttonClasses } from "@/components/ui/button-classes";
 import { InviteLink } from "@/components/ui/invite-link";
 import { Button } from "@/components/ui/button";
-import { ChevronDownIcon, MinusIcon, PlusIcon, TrashIcon } from "@/components/ui/icons";
+import { BasketIcon, ChevronDownIcon, MinusIcon, PlusIcon, TrashIcon } from "@/components/ui/icons";
 
 import type { Cart, CartItem, Member, PartyStatus, Recipe } from "./types";
 
@@ -22,6 +22,17 @@ function assignees(item: CartItem | Recipe, members: Member[], currentUserId: st
     .filter((member): member is Member => Boolean(member))
     .map((member) => ({ id: member.user_id, name: member.user_id === currentUserId ? "Ви" : member.name, avatarUrl: member.avatarUrl }));
   return named.length ? <AvatarStack members={named} max={3} /> : null;
+}
+
+function payerAvatars(item: CartItem, members: Member[], currentUserId: string) {
+  return item.assigned_member_ids
+    .map((id) => members.find((member) => member.user_id === id))
+    .filter((member): member is Member => Boolean(member))
+    .map((member) => ({
+      id: member.user_id,
+      name: member.user_id === currentUserId ? "Ви" : member.name,
+      avatarUrl: member.avatarUrl,
+    }));
 }
 
 function ItemRow({
@@ -42,6 +53,7 @@ function ItemRow({
   const [value, setValue] = useState(String(item.quantity));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [imageFailed, setImageFailed] = useState(false);
   const skipNextBlur = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const prepareButtonClick = () => {
@@ -78,16 +90,71 @@ function ItemRow({
     }
   }
 
+  async function mutateSubscription(subscribed: boolean) {
+    if (pending || !canEdit) return;
+    setPending(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/parties/${partyId}/cart`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: item.id, subscribed }),
+      });
+      if (!response.ok) throw new Error();
+      onCartUpdated(await response.json() as Cart);
+    } catch {
+      setError("Не вдалося змінити учасників оплати. Спробуйте ще раз.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const payers = payerAvatars(item, members, currentUserId);
+  const currentUserPays = item.assigned_member_ids.includes(currentUserId);
+  const currentUserIsOriginalPayer = item.base_assigned_member_ids.includes(currentUserId);
+  const currentUserSubscribed = item.subscriber_member_ids.includes(currentUserId);
+
   return (
     <li className="py-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium">{item.name}</p>
-          <p className="truncate text-xs text-ink-soft">{formatPurchaseUk(item.package_size, item.quantity)}</p>
+      <div className="flex items-start gap-3">
+        <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-[var(--radius-md)] bg-paper">
+          {item.image_url && !imageFailed ? (
+            // eslint-disable-next-line @next/next/no-img-element -- Silpo uses dynamic catalog image hosts.
+            <img
+              src={item.image_url}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              referrerPolicy="no-referrer"
+              onError={() => setImageFailed(true)}
+              className="h-full w-full object-contain"
+            />
+          ) : (
+            <BasketIcon className="h-6 w-6 text-stone-600" />
+          )}
         </div>
-        <div className="flex shrink-0 items-center gap-2.5">
-          {assignees(item, members, currentUserId)}
-          <Money amount={item.line_total_uah} className="text-sm" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="line-clamp-2 text-sm font-medium">{item.name}</p>
+              <p className="truncate text-xs text-ink-soft">{formatPurchaseUk(item.package_size, item.quantity)}</p>
+            </div>
+            <Money amount={item.line_total_uah} className="shrink-0 text-sm" />
+          </div>
+          <div className="mt-2 flex min-h-8 flex-wrap items-center gap-2">
+            <span className="text-xs text-ink-soft">Оплачують</span>
+            {payers.length > 0 && <AvatarStack members={payers} max={5} />}
+            {canEdit && !currentUserPays && (
+              <Button type="button" variant="secondary" size="sm" disabled={pending} onClick={() => void mutateSubscription(true)}>
+                Долучитися
+              </Button>
+            )}
+            {canEdit && currentUserSubscribed && !currentUserIsOriginalPayer && (
+              <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => void mutateSubscription(false)}>
+                Не оплачувати
+              </Button>
+            )}
+          </div>
         </div>
       </div>
       {canEdit && (

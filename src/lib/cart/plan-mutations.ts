@@ -19,6 +19,22 @@ export type MutablePlan = {
 const money = (value: number) => Math.round(value * 100) / 100;
 const productKey = (product: MutablePlanProduct) => product.lookupProductId ?? product.id;
 
+export function orderCartItemsByPlan<T extends { id: string; product_id: string }>(
+  items: T[],
+  products: MutablePlanProduct[],
+) {
+  const positions = new Map<string, number>();
+  for (const product of products) {
+    const key = productKey(product);
+    if (!positions.has(key)) positions.set(key, positions.size);
+  }
+  return [...items].sort((left, right) => {
+    const leftPosition = positions.get(left.product_id) ?? Number.MAX_SAFE_INTEGER;
+    const rightPosition = positions.get(right.product_id) ?? Number.MAX_SAFE_INTEGER;
+    return leftPosition - rightPosition || left.id.localeCompare(right.id);
+  });
+}
+
 /** Keeps the agent's persisted plan aligned with a direct edit to its flattened cart projection. */
 export function mutatePlanItem(plan: MutablePlan, productId: string, quantity: number | null): MutablePlan {
   if (!plan) return null;

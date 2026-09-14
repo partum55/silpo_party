@@ -116,6 +116,22 @@ function attributeValues(product: JsonObject, pattern: RegExp) {
   return Object.entries(attributes).filter(([key]) => pattern.test(key)).flatMap(([, value]) => strings(value));
 }
 
+function productImageUrl(...sources: unknown[]) {
+  for (const source of sources) {
+    for (const candidate of objects(source)) {
+      for (const [key, value] of Object.entries(candidate)) {
+        if (!/image|img|photo|picture|thumbnail/i.test(key)) continue;
+        const possible = typeof value === "string"
+          ? [value]
+          : [...strings(value), ...objects(value).flatMap((entry) => strings(field(entry, ["url", "src", "href"])))];
+        const url = possible.find((item) => /^https?:\/\//i.test(item));
+        if (url) return url;
+      }
+    }
+  }
+  return undefined;
+}
+
 function productCategory(name: string, size: HydratedProduct["packageSize"]) {
   if (size.unit !== "ml") return "food" as const;
   return /вода|сік|напій|нектар|лимонад|квас|компот|морс|чай|кава|пиво|вино|сидр|water|juice|drink|tea|coffee|beer|wine/i.test(name)
@@ -123,7 +139,7 @@ function productCategory(name: string, size: HydratedProduct["packageSize"]) {
     : "food" as const;
 }
 
-export function normalizeSilpoProduct(payload: unknown, requestedId: string): HydratedProduct | null {
+export function normalizeSilpoProduct(payload: unknown, requestedId: string, fallback?: unknown): HydratedProduct | null {
   const product = objects(payload).find((candidate) => String(field(candidate, ["id"]) ?? "") === requestedId);
   if (!product) return null;
   const id = text(field(product, ["id"]));
@@ -134,10 +150,12 @@ export function normalizeSilpoProduct(payload: unknown, requestedId: string): Hy
   const size = name ? packageSize(field(product, ["displayRatio"]), name) : null;
   const category = name && size ? productCategory(name, size) : null;
   if (!id || !name || priceUah === null || !unit || typeof available !== "boolean" || !size || !category) return null;
+  const imageUrl = productImageUrl(product, fallback);
 
   return {
     id,
     name,
+    ...(imageUrl ? { imageUrl } : {}),
     priceUah,
     unit,
     available,
@@ -322,7 +340,7 @@ export function createSilpoGateway(userId: string) {
             ...context,
             slug: text(field(match, ["slug"]))!,
           });
-          const product = normalizeSilpoProduct(details, String(field(match, ["id"]) ?? ""));
+          const product = normalizeSilpoProduct(details, String(field(match, ["id"]) ?? ""), match);
           if (!product) return null;
           const companyId = text(field(match, ["companyId"]));
           return {
@@ -349,7 +367,7 @@ export function createSilpoGateway(userId: string) {
       const slug = reference && text(reference.values.slug);
       if (!slug) return null;
       const details = await call(client, "silpo_get_product_details", { ...reference.context, slug });
-      const normalized = normalizeSilpoProduct(details, String(field(reference.match, ["id"]) ?? ""));
+      const normalized = normalizeSilpoProduct(details, String(field(reference.match, ["id"]) ?? ""), reference.match);
       if (!normalized) return null;
       const companyId = text(field(reference.match, ["companyId"]));
       return companyId ? { ...normalized, companyId } : normalized;

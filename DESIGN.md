@@ -91,6 +91,7 @@ Typography uses Manrope for Ukrainian body copy and Space Mono for prices and ot
 - Interactive targets are at least 40 px where space permits and always expose visible keyboard focus.
 - Icon-only controls have localized accessible names and a visible tooltip through `title`.
 - Numeric cart quantity is a positive integer package count. Both direct entry and minus/plus controls are available; zero and negative values are rejected in both client and server layers.
+- Cart products use live Silpo catalog imagery with a quiet basket-icon fallback. Payer avatars remain visible on every line; a participant may join a line's cost split and may withdraw only their own explicit subscription.
 - Removing a cart line is immediate and pessimistic. This is a low-impact, reversible planning action and does not use a confirmation dialog.
 - Inline errors stay next to the affected cart line. Controls are disabled while its mutation is pending to prevent duplicate requests.
 - Layouts must tolerate Ukrainian expansion, large quantities, and long product names without horizontal overflow.

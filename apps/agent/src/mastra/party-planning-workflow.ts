@@ -29,6 +29,7 @@ export const productSchema = z.object({
   lookupProductId: z.string().optional(),
   companyId: z.string().optional(),
   name: z.string(),
+  imageUrl: z.string().url().optional(),
   priceUah: z.number(),
   unit: z.string(),
   available: z.boolean(),

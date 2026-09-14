@@ -15,11 +15,11 @@ export default async function PartyPage({
   searchParams,
 }: {
   params: Promise<{ partyId: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; tab?: string }>;
 }) {
   const user = await requireUser();
   const { partyId } = await params;
-  const { error } = await searchParams;
+  const { error, tab } = await searchParams;
 
   try {
     const [party, members, messages, cart] = await Promise.all([
@@ -38,10 +38,12 @@ export default async function PartyPage({
           </div>
         )}
         <PartyLive
+          key={tab === "plan" ? "plan" : "chat"}
           partyId={partyId}
           partyName={party.name as string}
           currentUserId={user.id}
           isCreator={isCreator}
+          initialTab={tab === "plan" ? "plan" : "chat"}
           initialParty={{
             status: party.status as "ACTIVE" | "COMPLETED",
             agent_status: party.agent_status as string,

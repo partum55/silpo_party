@@ -22,6 +22,7 @@ type ProductMetadata = {
 export type HydratedProduct = {
   id: string;
   name: string;
+  imageUrl?: string;
   priceUah: number;
   unit: string;
   available: boolean;
