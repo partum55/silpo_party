@@ -10,8 +10,25 @@ export function silpoUserId(requestContext: RequestContext) {
   return userId;
 }
 
+const GATEWAY_CACHE_MS = 120_000;
+const userGateways = new Map<string, {
+  gateway: ReturnType<typeof createSilpoGateway>;
+  expiresAt: number;
+}>();
+
 function gateway(requestContext: RequestContext) {
-  return createSilpoGateway(silpoUserId(requestContext));
+  const userId = silpoUserId(requestContext);
+  const cached = userGateways.get(userId);
+  if (cached && cached.expiresAt > Date.now()) return cached.gateway;
+
+  const instance = createSilpoGateway(userId);
+  const entry = { gateway: instance, expiresAt: Date.now() + GATEWAY_CACHE_MS };
+  userGateways.set(userId, entry);
+  const cleanup = setTimeout(() => {
+    if (userGateways.get(userId) === entry) userGateways.delete(userId);
+  }, GATEWAY_CACHE_MS);
+  cleanup.unref();
+  return instance;
 }
 
 export const silpoSearchProducts = createTool({
@@ -20,6 +37,16 @@ export const silpoSearchProducts = createTool({
   inputSchema: z.object({ query: z.string().min(1) }),
   outputSchema: z.object({ data: z.unknown() }),
   execute: async ({ query }, { requestContext }) => ({ data: await gateway(requestContext).search(query) }),
+});
+
+export const silpoSearchVerifiedProducts = createTool({
+  id: "silpo-search-verified-products",
+  description: "Batch-search several product needs and inspect live details for the returned candidates in one call. Use short catalog terms naming one product or category per query, without quantities, event context, or full request phrases. Each lookupProductId is a valid external product id for a proposal.",
+  inputSchema: z.object({
+    queries: z.array(z.string().min(1)).min(1).max(4),
+  }),
+  outputSchema: z.object({ data: z.unknown() }),
+  execute: async ({ queries }, { requestContext }) => ({ data: await gateway(requestContext).searchVerified(queries) }),
 });
 
 export const silpoGetProductDetails = createTool({

@@ -18,6 +18,19 @@ const requiredAgentTools = [
 ] as const;
 
 const userQueues = new Map<string, Promise<void>>();
+const SILPO_CALL_TIMEOUT_MS = 20_000;
+
+export async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms.`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export async function serializeSilpoOperation<T>(userId: string, operation: () => Promise<T>) {
   // ponytail: process-local OAuth refresh lock; use a distributed lock if one user spans replicas.
@@ -159,7 +172,11 @@ function decodeToolResult(result: unknown) {
 }
 
 async function call(client: SilpoClient, name: string, args: JsonObject) {
-  return decodeToolResult(await client.callTool({ name, arguments: args }));
+  return decodeToolResult(await withTimeout(
+    client.callTool({ name, arguments: args }),
+    SILPO_CALL_TIMEOUT_MS,
+    `Silpo tool ${name}`,
+  ));
 }
 
 async function cartContext(client: SilpoClient, schemas: SilpoToolSchemas) {
@@ -276,6 +293,47 @@ export function createSilpoGateway(userId: string) {
   }
 
   return {
+    searchVerified: (queries: string[], limit = 12) => withClient(async (client, schemas) => {
+      const context = await getContext(client, schemas);
+      const searches = await Promise.all(queries.map((query) => call(client, "silpo_find_products_batch", {
+        ...context,
+        products: [query],
+        limit: 10,
+      })));
+      const perQuery = searches.map((search) => objects(search).filter((candidate) => {
+          const externalProductId = field(candidate, ["externalProductId"]);
+          return (typeof externalProductId === "string" || typeof externalProductId === "number")
+            && Boolean(text(field(candidate, ["slug"])));
+        }));
+      const interleaved: JsonObject[] = [];
+      for (let index = 0; interleaved.length < limit && perQuery.some((matches) => index < matches.length); index += 1) {
+        for (const matches of perQuery) {
+          const match = matches[index];
+          if (match && !interleaved.some((candidate) => field(candidate, ["externalProductId"]) === field(match, ["externalProductId"]))) {
+            interleaved.push(match);
+          }
+          if (interleaved.length === limit) break;
+        }
+      }
+      const unique = interleaved.map((match) => [String(field(match, ["externalProductId"])), match] as const);
+      return (await Promise.all(unique.map(async ([lookupProductId, match]) => {
+        try {
+          const details = await call(client, "silpo_get_product_details", {
+            ...context,
+            slug: text(field(match, ["slug"]))!,
+          });
+          const product = normalizeSilpoProduct(details, String(field(match, ["id"]) ?? ""));
+          if (!product) return null;
+          const companyId = text(field(match, ["companyId"]));
+          return {
+            lookupProductId,
+            product: companyId ? { ...product, companyId } : product,
+          };
+        } catch {
+          return null;
+        }
+      }))).flatMap((candidate) => candidate ? [candidate] : []);
+    }),
     search: (query: string) => withClient(async (client, schemas) => call(client, "silpo_find_products_batch", {
       ...await getContext(client, schemas),
       products: [query],

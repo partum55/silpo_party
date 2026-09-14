@@ -28,6 +28,7 @@ test("conversational workflow is registered for Studio", () => {
 });
 
 test("read-only Silpo alternative tools are registered for Studio", () => {
+  assert.ok(mastra.getTool("silpoSearchVerifiedProducts"));
   assert.ok(mastra.getTool("silpoGetSimilarProducts"));
   assert.ok(mastra.getTool("silpoGetReplacements"));
 });

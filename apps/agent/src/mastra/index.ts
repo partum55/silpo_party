@@ -11,6 +11,7 @@ import {
   silpoGetReplacements,
   silpoGetSimilarProducts,
   silpoSearchProducts,
+  silpoSearchVerifiedProducts,
 } from "./tools/silpo-tools.ts";
 
 const internalToken = process.env.AGENT_INTERNAL_TOKEN;
@@ -33,7 +34,7 @@ export const mastra = new Mastra({
   deployer: process.env.VERCEL ? new VercelDeployer({ maxDuration: 300 }) : undefined,
   agents: { partyPlannerAgent },
   workflows: { partyPlanningWorkflow, conversationalPartyWorkflow },
-  tools: { silpoSearchProducts, silpoGetProductDetails, silpoGetSimilarProducts, silpoGetReplacements, findRecipeTool },
+  tools: { silpoSearchProducts, silpoSearchVerifiedProducts, silpoGetProductDetails, silpoGetSimilarProducts, silpoGetReplacements, findRecipeTool },
   server: {
     // Mastra otherwise applies its 180-second Hono request timeout. A recipe turn can legitimately exceed
     // that while the model searches and hydrates several Silpo ingredients, which surfaced as a local 504.

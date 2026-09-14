@@ -48,9 +48,9 @@ export async function sendMessage(partyId: string, userId: string, content: stri
   return message;
 }
 
-// Longer than the routes' own maxDuration (300s) so a function that's still legitimately running never gets
-// its lock stolen out from under it — only one that the platform actually killed can look stale this long.
-const STALE_LOCK_MINUTES = 6;
+// runConversationalTurn has a 90-second hard deadline. Anything still locked beyond two minutes was killed
+// between acquiring the lock and recording its error, so a later status poll may safely resume the queue.
+const STALE_LOCK_MINUTES = 2;
 
 async function tryAcquireAgentLock(db: Db, partyId: string) {
   const staleBefore = new Date(Date.now() - STALE_LOCK_MINUTES * 60_000).toISOString();
@@ -131,4 +131,21 @@ async function processPendingMessages(db: Db, partyId: string, creatorId: string
     .limit(1);
   if (racedMessagesError) throw racedMessagesError;
   if (racedMessages?.length) await processPendingMessages(db, partyId, creatorId);
+}
+
+/**
+ * Re-enters a queue whose original post-response callback was killed by a deploy, process restart, or host
+ * timeout. The party page polls agent status, so an open page is also a lightweight queue watchdog.
+ */
+export async function resumePendingMessages(partyId: string, creatorId: string) {
+  const db = createSupabaseAdminClient();
+  const { data: pending, error } = await db
+    .from("chat_messages")
+    .select("id")
+    .eq("party_id", partyId)
+    .eq("sender_type", "USER")
+    .is("processed_at", null)
+    .limit(1);
+  if (error) throw error;
+  if (pending?.length) await processPendingMessages(db, partyId, creatorId);
 }

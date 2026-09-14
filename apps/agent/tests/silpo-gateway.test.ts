@@ -8,6 +8,7 @@ import {
   normalizeSilpoProduct,
   serializeSilpoOperation,
   toolArguments,
+  withTimeout,
 } from "../src/silpo/gateway.ts";
 
 const requiredTools = [
@@ -78,6 +79,13 @@ test("serializes Silpo operations per user to protect OAuth refresh tokens", asy
   });
   await Promise.all([operation(), operation(), operation()]);
   assert.equal(maximum, 1);
+});
+
+test("bounds a stalled Silpo operation", async () => {
+  await assert.rejects(
+    withTimeout(new Promise(() => {}), 5, "catalog lookup"),
+    /catalog lookup timed out after 5ms/,
+  );
 });
 
 test("normalizes the real Silpo product-detail shape", () => {

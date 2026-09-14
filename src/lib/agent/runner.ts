@@ -3,6 +3,8 @@ import "server-only";
 import { env } from "@/lib/env";
 import type { Db } from "@/lib/party/access";
 
+export const AGENT_TURN_TIMEOUT_MS = 90_000;
+
 async function loadPartyMembers(db: Db, partyId: string) {
   const { data, error } = await db.from("party_members").select("user_id, wishes").eq("party_id", partyId);
   if (error) throw error;
@@ -86,6 +88,7 @@ export async function runConversationalTurn(db: Db, {
       },
       requestContext: { silpoUserId: creatorId },
     }),
+    signal: AbortSignal.timeout(AGENT_TURN_TIMEOUT_MS),
   });
 
   if (!response.ok) {

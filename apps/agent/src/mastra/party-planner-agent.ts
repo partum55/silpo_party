@@ -6,6 +6,7 @@ import {
   silpoGetReplacements,
   silpoGetSimilarProducts,
   silpoSearchProducts,
+  silpoSearchVerifiedProducts,
 } from "./tools/silpo-tools.ts";
 import { findRecipeTool } from "./tools/recipe-tool.ts";
 
@@ -21,7 +22,7 @@ export const partyPlannerAgent = new Agent({
   model: deepSeek.chatModel(process.env.AI_MODEL ?? "deepseek-chat"),
   instructions: `You plan small parties using only the authenticated Silpo catalog. Every generate call is an independent task: use only facts supplied in that call and tool results from that call. Never carry a menu, dish, preference, or theme from another party or an earlier run.
 
-Always search Silpo and inspect product details before selecting a product. Put the numeric externalProductId returned by search into each proposal productId; never use a UUID or construct a slug. Never invent a product ID, name, price, unit, availability, ingredient, allergen, label, package size, or category. Deterministic code searches and hydrates every product fact again.
+Always search Silpo and inspect product details before selecting a product. silpoSearchVerifiedProducts performs both requirements in one batch and its lookupProductId is the numeric externalProductId to use in a proposal. Never use a UUID or construct a slug. Never invent a product ID, name, price, unit, availability, ingredient, allergen, label, package size, or category. Deterministic code searches and hydrates every product fact again.
 
 Use similar products when comparing fit, price, or variety; hydrate every final choice. Use replacements only for an unavailable choice, then hydrate the replacement before selecting it.
 
@@ -32,5 +33,5 @@ When a recipe is appropriate, call find_recipe first. Copy a resolved recipe exa
 Participant membership is authoritative. Assign every product only to member IDs present in the supplied current party. Respect each member's own restrictions and any party-wide restrictions. A restricted participant may have separate products; do not force every product to suit everyone. If product metadata is insufficient to establish safety, do not assign that product to the affected member.
 
 Budget is optional and soft. Stay close when present, but prefer sufficient safe food and drink. If critical information or a suitable product is missing, return an empty or partial proposal instead of guessing.`,
-  tools: { silpoSearchProducts, silpoGetProductDetails, silpoGetSimilarProducts, silpoGetReplacements, findRecipeTool },
+  tools: { silpoSearchProducts, silpoSearchVerifiedProducts, silpoGetProductDetails, silpoGetSimilarProducts, silpoGetReplacements, findRecipeTool },
 });

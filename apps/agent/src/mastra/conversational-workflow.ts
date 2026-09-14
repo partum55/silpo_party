@@ -192,7 +192,7 @@ async function queryVariants(party: Input["currentParty"]) {
   try {
     const response = await partyPlannerAgent.generate(
       `Return a JSON object with exactly one key "wishes": an array with, for every supplied wish, exactly {"memberId": string, "wishId": string, "queries": string[]} (up to two short Silpo search variants). Preserve memberId and wishId exactly.\n${JSON.stringify(wishes)}`,
-      { structuredOutput: { schema } },
+      { structuredOutput: { schema }, abortSignal: AbortSignal.timeout(20_000) },
     );
     const keys = new Set(wishes.map((wish) => `${wish.memberId}:${wish.wishId}`));
     return Object.fromEntries((response.object?.wishes ?? [])
@@ -224,7 +224,7 @@ If intent is "preference_mutation": planOperations must be [], readQuestion must
 If intent is "plan_mutation": preferenceOperations must be [], readQuestion must be null, planOperations must be non-empty. Each planOperations item is exactly one of {"action":"add","request":string,"assignedMemberIds":string[]}, {"action":"remove","targetType":"product"|"recipe","targetId":string}, or {"action":"replace","targetType":"product"|"recipe","targetId":string,"request":string}. targetId values must come from currentPlan.
 
 Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId, inputData.currentParty.members.map((member) => member.id), inputData.budgetUah, inputData.message, Boolean(inputData.currentPlan))}\n${JSON.stringify({ message: inputData.message, mode: inputData.mode, actorId: inputData.actorId, hostId: inputData.hostId, scope: inputData.scope, currentParty: inputData.currentParty, currentPlan: inputData.currentPlan })}`,
-        { structuredOutput: { schema: conversationDecisionSchema }, requestContext },
+        { structuredOutput: { schema: conversationDecisionSchema }, requestContext, abortSignal: AbortSignal.timeout(20_000) },
       );
       decision = decisionResponse.object
         ? normalizeDecisionForMode(inputData, decisionResponse.object)
@@ -250,7 +250,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
     if (decision.intent === "read_only") {
       const answer = await partyPlannerAgent.generate(
         `Answer the user's read-only question using only this frozen state. Do not call tools, propose changes, or invent facts.\n${JSON.stringify({ message: inputData.message, currentParty: inputData.currentParty, currentPlan: inputData.currentPlan })}`,
-        { requestContext },
+        { requestContext, abortSignal: AbortSignal.timeout(20_000) },
       );
       return readOnlyResult(inputData, answer.text);
     }
@@ -298,8 +298,12 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
       const result = await runPlanningLoop(state, {
         plan: async ({ previousBlockers }) => {
           const response = await partyPlannerAgent.generate(
-            `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "quantity": number, "assignedMemberIds": string[], "reason": string}], "recipes": [{"title": string, "source": "web"|"generated", "sourceUrl": string|null, "servings": number, "assignedMemberIds": string[], "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece", "productId": string}], "steps": string[]}], "wishFulfillments": [{"memberId": string, "wishId": string, "resolvedStrategy": "ready_made"|"recipe", "selectedProductIds": string[], "recipeTitle": string|null, "fallbackReason": "explicit_cooking"|"no_candidates"|"no_safe_candidate"|"poor_match"|null}]}. Always include all three arrays, even if empty. Do not rename fields, omit fields, or add other keys — every selections/recipes item needs every listed field. Modify only components required by the explicit operations or deterministic blockers below; preserve every unaffected product, recipe, assignment, quantity, and wish fulfillment shown in currentProposal exactly. Never change member status. Use the supplied hydrated wish candidates for wish products; use Silpo tools for direct host additions/replacements and recipe ingredients. Quantity is always a positive integer count of the product's displayed purchasable increment/package, never kilograms or a raw recipe amount. Example: if the catalog increment is 100 g and 250 g is needed, use quantity 3.\n${modeInstructions(inputData.mode, inputData.actorId, applied.party.members.map((member) => member.id), inputData.budgetUah, inputData.message, Boolean(recovered.plan))}\n${JSON.stringify({ message: inputData.message, mode: inputData.mode, budgetUah: inputData.budgetUah, decision, currentParty: applied.party, currentProposal: working, wishCandidates, blockers: previousBlockers })}`,
-            { maxSteps: inputData.mode === "SHOPPING" ? 8 : inputData.mode === "DINNER" ? 16 : 20, requestContext },
+            `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "quantity": number, "assignedMemberIds": string[], "reason": string}], "recipes": [{"title": string, "source": "web"|"generated", "sourceUrl": string|null, "servings": number, "assignedMemberIds": string[], "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece", "productId": string}], "steps": string[]}], "wishFulfillments": [{"memberId": string, "wishId": string, "resolvedStrategy": "ready_made"|"recipe", "selectedProductIds": string[], "recipeTitle": string|null, "fallbackReason": "explicit_cooking"|"no_candidates"|"no_safe_candidate"|"poor_match"|null}]}. Always include all three arrays, even if empty. Do not rename fields, omit fields, or add other keys — every selections/recipes item needs every listed field. Modify only components required by the explicit operations or deterministic blockers below; preserve every unaffected product, recipe, assignment, quantity, and wish fulfillment shown in currentProposal exactly. Never change member status. Use the supplied hydrated wish candidates for wish products. For direct additions or replacements, call silpoSearchVerifiedProducts once with one short catalog term per concrete product/category need (never pass quantities, event context, or a whole request as a query), select using its hydrated results and lookupProductId values, and avoid extra comparison calls unless that batch has no suitable candidate. Satisfy a requested total amount using the available package size and quantity when the exact package size is unavailable. Quantity is always a positive integer count of the product's displayed purchasable increment/package, never kilograms or a raw recipe amount. Example: if the catalog increment is 100 g and 250 g is needed, use quantity 3.\n${modeInstructions(inputData.mode, inputData.actorId, applied.party.members.map((member) => member.id), inputData.budgetUah, inputData.message, Boolean(recovered.plan))}\n${JSON.stringify({ message: inputData.message, mode: inputData.mode, budgetUah: inputData.budgetUah, decision, currentParty: applied.party, currentProposal: working, wishCandidates, blockers: previousBlockers })}`,
+            {
+              maxSteps: inputData.currentPlan ? 4 : inputData.mode === "SHOPPING" ? 6 : 12,
+              requestContext,
+              abortSignal: AbortSignal.timeout(60_000),
+            },
           );
           let proposed;
           try {
@@ -324,7 +328,10 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
         },
         hydrate: silpo.hydrate,
         resolveRecipe: findRecipe,
-        maxRepairAttempts: inputData.mode === "EVENT" ? 2 : 1,
+        // A conversational edit is incremental and mergeWithProtectedPlan already preserves the valid
+        // baseline. Re-running a full tool-using plan for one failed addition can turn one edit into minutes;
+        // publish the valid partial draft and report its blockers instead.
+        maxRepairAttempts: 0,
         postValidate: (draft) => [
           ...validatePlanOperations(recovered.plan, draft, decision.planOperations),
           ...validateModeAssignments({
@@ -347,7 +354,9 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
         preferenceOperations: decision.intent === "preference_mutation" ? decision.preferenceOperations : [],
         planOperations: decision.intent === "plan_mutation" ? decision.planOperations : [],
         updatedPreferences: preferencesFromParty(applied.party),
-        updatedPlan: result.currentPlan,
+        // Never replace an existing basket with an invalid partial draft. A transient catalog miss while
+        // validating an incremental addition must not silently delete products that were already visible.
+        updatedPlan: result.readiness === "ready" ? result.currentPlan : (inputData.currentPlan ?? result.currentPlan),
         blockers: result.blockers,
         warnings: result.warnings,
         questions: result.questions,
