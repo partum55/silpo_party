@@ -1,5 +1,7 @@
 import "server-only";
 
+import { after } from "next/server";
+
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { runConversationalTurn } from "@/lib/agent/runner";
 import { syncCartFromPlan } from "@/lib/cart/service";
@@ -33,11 +35,15 @@ export async function sendMessage(partyId: string, userId: string, content: stri
     .single();
   if (error) throw error;
 
-  // Fire-and-forget from the caller's perspective is not safe on serverless (the process may be frozen after
-  // the response is sent), so this awaits inline. A message sent while another request already owns
-  // processing returns immediately without draining (see tryAcquireAgentLock) — that owner's own drain loop
-  // re-checks for unprocessed messages before releasing the lock, so this message is still picked up.
-  await processPendingMessages(db, partyId, party!.creator_id);
+  // Runs after this response is sent (Next.js after()) instead of being awaited inline: a full agent turn
+  // can take well over a minute, and the client shouldn't have to hold a request open that long to find out
+  // it worked — it learns about progress and the result purely through Realtime (chat_messages inserts,
+  // parties.agent_status updates), which is what the page subscribes to. after() keeps the function alive on
+  // Vercel until this settles, unlike a bare unawaited call, which is not safe on serverless (the process can
+  // freeze right after the response goes out). A message sent while another request already owns processing
+  // returns immediately without draining (see tryAcquireAgentLock) — that owner's own drain loop re-checks
+  // for unprocessed messages before releasing the lock, so this message is still picked up.
+  after(() => processPendingMessages(db, partyId, party!.creator_id));
   return message;
 }
 
