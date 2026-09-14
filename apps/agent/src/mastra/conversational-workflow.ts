@@ -184,67 +184,74 @@ Respect the supplied scope.\n${JSON.stringify({ message: inputData.message, acto
       return readOnlyResult(inputData, answer.text);
     }
 
-    const silpo = createSilpoGateway(silpoUserId(requestContext));
-    const recovered = await recoverLookups(inputData.currentPlan as PartyPlanDraft | null, silpo);
-    const baseline = planToProposal(recovered.plan);
-    const wishCandidates = await discoverWishCandidates({
-      party: applied.party,
-      queryVariants: await queryVariants(applied.party),
-      search: silpo.searchProductIds,
-      hydrate: silpo.hydrate,
-    });
+    // Everything below drives multiple free-text LLM calls (recipe/plan JSON isn't schema-constrained by the
+    // provider, only Zod-validated after the fact — see parsePlannerProposal). A malformed response anywhere
+    // in here must not crash the whole turn; fail soft with the original, unmodified state instead.
+    try {
+      const silpo = createSilpoGateway(silpoUserId(requestContext));
+      const recovered = await recoverLookups(inputData.currentPlan as PartyPlanDraft | null, silpo);
+      const baseline = planToProposal(recovered.plan);
+      const wishCandidates = await discoverWishCandidates({
+        party: applied.party,
+        queryVariants: await queryVariants(applied.party),
+        search: silpo.searchProductIds,
+        hydrate: silpo.hydrate,
+      });
 
-    for (const set of wishCandidates) {
-      const prior = recovered.plan?.wishFulfillments.find((item) => item.memberId === set.memberId && item.wishId === set.wishId);
-      for (const id of prior?.selectedProductIds ?? []) {
-        const product = recovered.plan?.products.find((item) => item.id === id);
-        if (product?.lookupProductId && !set.candidates.some((candidate) => candidate.lookupProductId === product.lookupProductId)) {
-          set.candidates.push({ lookupProductId: product.lookupProductId, product });
+      for (const set of wishCandidates) {
+        const prior = recovered.plan?.wishFulfillments.find((item) => item.memberId === set.memberId && item.wishId === set.wishId);
+        for (const id of prior?.selectedProductIds ?? []) {
+          const product = recovered.plan?.products.find((item) => item.id === id);
+          if (product?.lookupProductId && !set.candidates.some((candidate) => candidate.lookupProductId === product.lookupProductId)) {
+            set.candidates.push({ lookupProductId: product.lookupProductId, product });
+          }
         }
       }
+
+      let working = baseline;
+      const state = createInitialState({ request: inputData.message, currentParty: applied.party });
+      state.currentPlan = recovered.plan;
+      state.budgetUah = inputData.budgetUah;
+      state.restrictions = inputData.partyWideRestrictions;
+      state.wishCandidates = wishCandidates;
+      state.blockers = recovered.unresolvedIds.map((productId) => ({ code: "product_not_found", message: `Existing product ${productId} could not be resolved in Silpo.`, productId }));
+
+      const result = await runPlanningLoop(state, {
+        plan: async ({ previousBlockers }) => {
+          const response = await partyPlannerAgent.generate(
+            `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "quantity": number, "assignedMemberIds": string[], "reason": string}], "recipes": [{"title": string, "source": "web"|"generated", "sourceUrl": string|null, "servings": number, "assignedMemberIds": string[], "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece", "productId": string}], "steps": string[]}], "wishFulfillments": [{"memberId": string, "wishId": string, "resolvedStrategy": "ready_made"|"recipe", "selectedProductIds": string[], "recipeTitle": string|null, "fallbackReason": "explicit_cooking"|"no_candidates"|"no_safe_candidate"|"poor_match"|null}]}. Always include all three arrays, even if empty. Do not rename fields, omit fields, or add other keys — every selections/recipes item needs every listed field. Modify only components required by the explicit operations or deterministic blockers below; preserve every unaffected product, recipe, assignment, quantity, and wish fulfillment shown in currentProposal exactly. Never change member status. Use the supplied hydrated wish candidates for wish products; use Silpo tools for direct host additions/replacements and recipe ingredients.\n${JSON.stringify({ message: inputData.message, decision, currentParty: applied.party, currentProposal: working, wishCandidates, blockers: previousBlockers })}`,
+            { maxSteps: 20, requestContext },
+          );
+          working = mergeWithProtectedPlan({
+            baseline,
+            proposed: parsePlannerProposal(response.text),
+            currentPlan: recovered.plan,
+            affectedWishKeys: applied.affectedWishKeys,
+            planOperations: decision.planOperations,
+            invalidProductIds: previousBlockers.flatMap((blocker) => blocker.productId ?? []),
+          });
+          return working;
+        },
+        hydrate: silpo.hydrate,
+        resolveRecipe: findRecipe,
+        postValidate: (draft) => validatePlanOperations(recovered.plan, draft, decision.planOperations),
+      });
+
+      return {
+        responseText: result.readiness === "ready" ? "Party plan updated." : "I updated the draft, but some items still need attention.",
+        intent: decision.intent,
+        preferenceOperations: decision.intent === "preference_mutation" ? decision.preferenceOperations : [],
+        planOperations: decision.intent === "plan_mutation" ? decision.planOperations : [],
+        updatedPreferences: preferencesFromParty(applied.party),
+        updatedPlan: result.currentPlan,
+        blockers: result.blockers,
+        warnings: result.warnings,
+        questions: result.questions,
+        readiness: result.readiness,
+      };
+    } catch {
+      return readOnlyResult(inputData, "Sorry, something went wrong while updating the cart. Please try again.");
     }
-
-    let working = baseline;
-    const state = createInitialState({ request: inputData.message, currentParty: applied.party });
-    state.currentPlan = recovered.plan;
-    state.budgetUah = inputData.budgetUah;
-    state.restrictions = inputData.partyWideRestrictions;
-    state.wishCandidates = wishCandidates;
-    state.blockers = recovered.unresolvedIds.map((productId) => ({ code: "product_not_found", message: `Existing product ${productId} could not be resolved in Silpo.`, productId }));
-
-    const result = await runPlanningLoop(state, {
-      plan: async ({ previousBlockers }) => {
-        const response = await partyPlannerAgent.generate(
-          `Return a complete planner proposal JSON using the existing planner schema. Modify only components required by the explicit operations or deterministic blockers. Preserve every unaffected product, recipe, assignment, quantity, and wish fulfillment shown in currentProposal. Never change member status. Use the supplied hydrated wish candidates for wish products; use Silpo tools for direct host additions/replacements and recipe ingredients.\n${JSON.stringify({ message: inputData.message, decision, currentParty: applied.party, currentProposal: working, wishCandidates, blockers: previousBlockers })}`,
-          { maxSteps: 20, requestContext },
-        );
-        working = mergeWithProtectedPlan({
-          baseline,
-          proposed: parsePlannerProposal(response.text),
-          currentPlan: recovered.plan,
-          affectedWishKeys: applied.affectedWishKeys,
-          planOperations: decision.planOperations,
-          invalidProductIds: previousBlockers.flatMap((blocker) => blocker.productId ?? []),
-        });
-        return working;
-      },
-      hydrate: silpo.hydrate,
-      resolveRecipe: findRecipe,
-      postValidate: (draft) => validatePlanOperations(recovered.plan, draft, decision.planOperations),
-    });
-
-    return {
-      responseText: result.readiness === "ready" ? "Party plan updated." : "I updated the draft, but some items still need attention.",
-      intent: decision.intent,
-      preferenceOperations: decision.intent === "preference_mutation" ? decision.preferenceOperations : [],
-      planOperations: decision.intent === "plan_mutation" ? decision.planOperations : [],
-      updatedPreferences: preferencesFromParty(applied.party),
-      updatedPlan: result.currentPlan,
-      blockers: result.blockers,
-      warnings: result.warnings,
-      questions: result.questions,
-      readiness: result.readiness,
-    };
   },
 });
 
