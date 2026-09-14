@@ -143,6 +143,11 @@ const conversationalTurn = createStep({
       { structuredOutput: { schema: conversationDecisionSchema }, requestContext },
     );
     const decision = decisionResponse.object;
+    if (!decision) {
+      // The model's JSON didn't satisfy conversationDecisionSchema's strict validation (e.g. a superRefine
+      // rule), so structuredOutput came back without a parsed object. Fail soft instead of crashing the turn.
+      return readOnlyResult(inputData, "Sorry, I couldn't understand that message. Could you rephrase it?");
+    }
     const applied = applyConversationDecision({
       party: inputData.currentParty,
       actorId: inputData.actorId,

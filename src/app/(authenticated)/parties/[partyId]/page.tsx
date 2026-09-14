@@ -1,10 +1,11 @@
+import { ChatPanel } from "@/components/chat-panel";
 import { requireUser } from "@/lib/auth";
 import { getCart } from "@/lib/cart/service";
 import { listMessages } from "@/lib/chat/service";
 import { getParty, listMembers } from "@/lib/party/service";
 import { RuleViolation } from "@/lib/party/rules";
 
-import { deletePartyAction, finalizeCartAction, leavePartyAction, sendMessageAction } from "../actions";
+import { deletePartyAction, finalizeCartAction, leavePartyAction } from "../actions";
 
 export default async function PartyPage({
   params,
@@ -61,36 +62,18 @@ export default async function PartyPage({
 
         <section className="space-y-2">
           <h2 className="font-medium">Чат</h2>
-          <ul className="max-h-80 space-y-1 overflow-y-auto rounded border p-3 text-sm">
-            {messages.length === 0 && <li className="text-zinc-500">Повідомлень ще немає.</li>}
-            {messages.map((message) => (
-              <li key={message.id as string}>
-                <span className="font-semibold">
-                  {message.sender_type === "USER"
-                    ? message.sender_user_id === user.id
-                      ? "Ви"
-                      : "Учасник"
-                    : (message.sender_type as string)}
-                  :
-                </span>{" "}
-                {message.content as string}
-              </li>
-            ))}
-          </ul>
-          {isActive && (
-            <form action={sendMessageAction} className="flex gap-2">
-              <input type="hidden" name="partyId" value={partyId} />
-              <input
-                name="content"
-                placeholder="Напишіть агенту... (напр. «додай молоко»)"
-                required
-                className="flex-1 rounded border px-3 py-2"
-              />
-              <button type="submit" className="rounded bg-black px-4 py-2 text-white">
-                Надіслати
-              </button>
-            </form>
-          )}
+          <ChatPanel
+            partyId={partyId}
+            currentUserId={user.id}
+            initialMessages={messages as unknown as Array<{
+              id: string;
+              sender_type: "USER" | "AGENT" | "SYSTEM";
+              sender_user_id: string | null;
+              content: string;
+              created_at: string;
+            }>}
+            active={isActive}
+          />
         </section>
 
         <section className="space-y-2">

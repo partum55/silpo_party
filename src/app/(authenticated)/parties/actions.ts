@@ -5,7 +5,6 @@ import { revalidatePath } from "next/cache";
 
 import { requireUser } from "@/lib/auth";
 import { finalizeCart } from "@/lib/cart/service";
-import { sendMessage } from "@/lib/chat/service";
 import { createParty, deleteParty, joinPartyByCode, leaveParty } from "@/lib/party/service";
 import { RuleViolation } from "@/lib/party/rules";
 
@@ -61,21 +60,6 @@ export async function deletePartyAction(formData: FormData) {
     throw error;
   }
   redirect("/");
-}
-
-export async function sendMessageAction(formData: FormData) {
-  const user = await requireUser();
-  const partyId = String(formData.get("partyId"));
-  const content = String(formData.get("content") ?? "").trim();
-  if (content) {
-    try {
-      await sendMessage(partyId, user.id, content);
-    } catch (error) {
-      if (!(error instanceof RuleViolation)) throw error;
-    }
-  }
-  revalidatePath(`/parties/${partyId}`);
-  redirect(`/parties/${partyId}`);
 }
 
 export async function finalizeCartAction(formData: FormData) {
