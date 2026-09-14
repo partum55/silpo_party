@@ -162,11 +162,13 @@ function restrictionSafety(product: HydratedProduct, restriction: string): Restr
   }
 
   if (value.includes("vegan") || value.includes("веган")) {
-    if (labels.match(/vegan|веган/)) return "safe";
-    if (!ingredients) return "unknown";
-    return ingredients.match(/milk|cream|cheese|egg|honey|meat|fish|молок|вершк|сир|яйц|мед|м['’]?яс|риб/)
-      ? "unsafe"
-      : "safe";
+    const animalProduct = /milk|cream|butter|whey|casein|cheese|yogurt|egg|honey|meat|fish|gelatin|lard|молок|вершк|масло|сироват|казеїн|сир|йогурт|яйц|мед|м['’]?яс|риб|желатин|смалец/;
+    const plantAlternative = /plant[- ]?based|oat|soy|almond|coconut|rice drink|рослинн|вівсян|соєв|мигдал|кокос|рисов.*напій/;
+    if (/vegan|веган/.test(`${name} ${labels}`)) return "safe";
+    if (plantAlternative.test(name) && !animalProduct.test(`${ingredients} ${allergens}`)) return "safe";
+    if (animalProduct.test(`${ingredients} ${allergens} ${name}`)) return "unsafe";
+    if (hasReadableComposition(ingredients, allergens) || isObviouslyUnaffectedWholeFood(product, name)) return "safe";
+    return "unknown";
   }
 
   if (value.match(/pescatar|пескетар/)) {

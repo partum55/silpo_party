@@ -223,8 +223,10 @@ function restrictionValues(value: unknown): string[] {
 
 function canonicalRestriction(value: string): string | null {
   const normalized = value.trim().toLocaleLowerCase("uk");
-  // These Silpo profile slugs explicitly mean that the guest eats everything in that category.
-  if (normalized === "all-food" || normalized === "all-meat") return null;
+  // Silpo returns machine slugs with name: null. `all-food` means no dietary exclusion, while the live
+  // vegan profile is represented as `all-meat` (all animal-meat/animal-product food excluded).
+  if (normalized === "all-food") return null;
+  if (normalized === "all-meat") return "vegan";
   // Silpo currently returns this transliterated slug (with name: null) for lactose intolerance.
   if (normalized === "lactoza") return "lactose";
   return value.trim() || null;
