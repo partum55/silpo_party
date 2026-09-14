@@ -12,7 +12,8 @@ export type RuleError =
   | "already_member"
   | "party_full"
   | "too_many_active_parties"
-  | "creator_must_delete_not_leave";
+  | "creator_must_delete_not_leave"
+  | "member_marked_ready";
 
 export type RuleResult = { ok: true } | { ok: false; error: RuleError };
 
@@ -53,6 +54,15 @@ export function checkActiveMemberAction(args: { isMember: boolean; partyStatus: 
   if (!args.isMember) return err("not_member");
   if (args.partyStatus === null) return err("not_found");
   if (args.partyStatus !== "ACTIVE") return err("party_completed");
+  return ok;
+}
+
+/** A member marked "ready" has said they're done requesting things — the composer hides itself client-side,
+ *  and this is the server-side backstop so a direct API call can't send a message on their behalf either. */
+export function checkSendMessage(args: { isMember: boolean; partyStatus: PartyStatus | null; isReady: boolean }): RuleResult {
+  const base = checkActiveMemberAction(args);
+  if (!base.ok) return base;
+  if (args.isReady) return err("member_marked_ready");
   return ok;
 }
 

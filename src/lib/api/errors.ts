@@ -10,6 +10,7 @@ const statusByCode: Record<string, number> = {
   party_full: 409,
   too_many_active_parties: 409,
   creator_must_delete_not_leave: 409,
+  member_marked_ready: 409,
 };
 
 export function toErrorResponse(error: unknown) {

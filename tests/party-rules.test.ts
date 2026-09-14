@@ -8,6 +8,7 @@ import {
   checkFinalize,
   checkJoin,
   checkLeave,
+  checkSendMessage,
   MAX_ACTIVE_PARTIES_PER_USER,
   MAX_MEMBERS,
 } from "../src/lib/party/rules.ts";
@@ -51,6 +52,14 @@ test("chat/cart writes require an active member and an ACTIVE party", () => {
     ok: false,
     error: "party_completed",
   });
+});
+
+test("sending a chat message requires an active member, an ACTIVE party, and not being marked ready", () => {
+  const base = { isMember: true, partyStatus: "ACTIVE" as const, isReady: false };
+  assert.deepEqual(checkSendMessage(base), { ok: true });
+  assert.deepEqual(checkSendMessage({ ...base, isMember: false }), { ok: false, error: "not_member" });
+  assert.deepEqual(checkSendMessage({ ...base, partyStatus: "COMPLETED" }), { ok: false, error: "party_completed" });
+  assert.deepEqual(checkSendMessage({ ...base, isReady: true }), { ok: false, error: "member_marked_ready" });
 });
 
 test("only the creator can finalize, and only while ACTIVE", () => {

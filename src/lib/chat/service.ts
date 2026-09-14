@@ -6,8 +6,8 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { runConversationalTurn } from "@/lib/agent/runner";
 import { syncCartFromPlan } from "@/lib/cart/service";
 import { formatUnknownError } from "@/lib/errors";
-import { assertOk, checkActiveMemberAction, checkRead } from "@/lib/party/rules";
-import { getMembership, getPartyRow, type Db } from "@/lib/party/access";
+import { assertOk, checkRead, checkSendMessage } from "@/lib/party/rules";
+import { getMemberReady, getMembership, getPartyRow, type Db } from "@/lib/party/access";
 
 export async function listMessages(partyId: string, userId: string) {
   const db = createSupabaseAdminClient();
@@ -25,9 +25,9 @@ export async function listMessages(partyId: string, userId: string) {
 
 export async function sendMessage(partyId: string, userId: string, content: string) {
   const db = createSupabaseAdminClient();
-  const role = await getMembership(db, partyId, userId);
+  const [role, isReady] = await Promise.all([getMembership(db, partyId, userId), getMemberReady(db, partyId, userId)]);
   const party = await getPartyRow(db, partyId);
-  assertOk(checkActiveMemberAction({ isMember: Boolean(role), partyStatus: (party?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null }));
+  assertOk(checkSendMessage({ isMember: Boolean(role), partyStatus: (party?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null, isReady }));
 
   const { data: message, error } = await db
     .from("chat_messages")

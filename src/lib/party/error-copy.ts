@@ -11,6 +11,7 @@ const ERROR_COPY: Record<string, string> = {
   party_full: "У вечірці вже максимум учасників (10).",
   too_many_active_parties: "У вас вже дві активні вечірки — завершіть або видаліть одну, щоб створити нову.",
   creator_must_delete_not_leave: "Організатор не може покинути вечірку — лише видалити її.",
+  member_marked_ready: "Зніміть позначку «Готовий(-а)», щоб писати повідомлення.",
 };
 
 export function errorMessage(code: string): string {
