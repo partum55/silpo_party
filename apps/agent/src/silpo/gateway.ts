@@ -199,7 +199,7 @@ const restrictionContainerNames = [
   "items",
 ] as const;
 
-const restrictionLabelNames = ["name", "title", "label", "displayName", "description", "type", "code"] as const;
+const restrictionLabelNames = ["name", "title", "label", "displayName", "description", "type", "code", "slug"] as const;
 
 function isInactiveRestriction(value: JsonObject) {
   return ["active", "enabled", "selected", "isActive", "isEnabled", "isSelected"]
@@ -221,6 +221,15 @@ function restrictionValues(value: unknown): string[] {
   return [...labels, ...booleanLabels, ...nested];
 }
 
+function canonicalRestriction(value: string): string | null {
+  const normalized = value.trim().toLocaleLowerCase("uk");
+  // These Silpo profile slugs explicitly mean that the guest eats everything in that category.
+  if (normalized === "all-food" || normalized === "all-meat") return null;
+  // Silpo currently returns this transliterated slug (with name: null) for lactose intolerance.
+  if (normalized === "lactoza") return "lactose";
+  return value.trim() || null;
+}
+
 /** Normalizes the intentionally schema-flexible Silpo profile response into restriction labels for the planner. */
 export function extractFoodRestrictions(payload: unknown): string[] {
   const decoded = decodeToolResult(payload);
@@ -229,7 +238,8 @@ export function extractFoodRestrictions(payload: unknown): string[] {
         const value = field(candidate, [name]);
         return value === undefined ? [] : [value];
       }));
-  const values = roots.length ? roots.flatMap(restrictionValues) : restrictionValues(decoded);
+  const values = (roots.length ? roots.flatMap(restrictionValues) : restrictionValues(decoded))
+    .flatMap((value) => canonicalRestriction(value) ?? []);
   return [...new Map(values.map((value) => [value.toLocaleLowerCase("uk"), value])).values()];
 }
 

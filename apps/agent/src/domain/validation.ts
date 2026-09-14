@@ -100,13 +100,14 @@ type IngredientRestrictionRule = {
   restriction: RegExp;
   forbidden: RegExp;
   explicitlySafe: RegExp;
+  forbiddenName?: RegExp;
 };
 
 // Covers the common dietary exclusions and the major food-allergen families returned by Silpo. These are
 // deliberately stem-based because profile values and catalog attributes may independently be Ukrainian or
 // English and use different grammatical forms.
 const ingredientRestrictionRules: IngredientRestrictionRule[] = [
-  { restriction: /lactose|лактоз/, forbidden: /lactose|лактоз|milk|cream|молок|вершк/, explicitlySafe: /lactose[- ]?free|без\s*лактоз|безлактоз/ },
+  { restriction: /lactose|lactoza|лактоз/, forbidden: /lactose|лактоз|milk|cream|молок|вершк/, explicitlySafe: /lactose[- ]?free|без\s*лактоз|безлактоз/, forbiddenName: /молоко|вершк|сметан|кефір|йогурт|dairy milk|cow'?s? milk|cream|yogurt|kefir/ },
   { restriction: /gluten|глютен|celiac|целіак/, forbidden: /gluten|wheat|barley|rye|spelt|пшениц|ячмін|жит(?:о|н)|полб/, explicitlySafe: /gluten[- ]?free|без\s*глютен|безглютен/ },
   { restriction: /peanut|арахіс/, forbidden: /peanut|groundnut|арахіс/, explicitlySafe: /peanut[- ]?free|без\s*арахіс/ },
   { restriction: /tree nuts?|горіх|мигдал|фундук|кеш['’]?ю|фісташ/, forbidden: /tree nuts?|nut|almond|hazelnut|cashew|pistachio|walnut|pecan|macadamia|горіх|мигдал|фундук|кеш['’]?ю|фісташ|пекан|макадам/, explicitlySafe: /nut[- ]?free|без\s*горіх/ },
@@ -189,7 +190,7 @@ function restrictionSafety(product: HydratedProduct, restriction: string): Restr
   const rule = ingredientRestrictionRules.find((candidate) => candidate.restriction.test(value));
   if (rule) {
     if (rule.explicitlySafe.test(`${name} ${labels}`)) return "safe";
-    if (rule.forbidden.test(`${ingredients} ${allergens}`)) return "unsafe";
+    if (rule.forbidden.test(`${ingredients} ${allergens}`) || rule.forbiddenName?.test(name)) return "unsafe";
     if (hasReadableComposition(ingredients, allergens) || isObviouslyUnaffectedWholeFood(product, name)) return "safe";
   }
 
