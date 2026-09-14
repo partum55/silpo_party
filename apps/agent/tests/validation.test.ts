@@ -408,6 +408,20 @@ test("a lactose restriction accepts a clearly non-dairy drink when Silpo omits m
   assert.equal(result.readiness, "ready");
 });
 
+test("a vegan restriction rejects cow milk by name even when Silpo omits metadata", async () => {
+  const result = await validateProposal({
+    input: { request: "Додай молоко", currentParty: { members: [{ id: "a", restrictions: ["vegan"] }] } },
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([{ productId: "milk", quantity: 1, assignedMemberIds: ["a"], reason: "Milk" }]),
+    hydrate,
+    targets: { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 },
+  });
+
+  assert.ok(result.blockers.some((blocker) => blocker.code === "restriction_violation"));
+  assert.equal(result.readiness, "invalid");
+});
+
 test("ambiguous processed food without evidence remains unverified", async () => {
   const result = await validateProposal({
     input: { request: "Vegetarian party", currentParty: { members: [{ id: "a", restrictions: ["vegetarian"] }] } },
