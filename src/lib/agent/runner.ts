@@ -1,8 +1,6 @@
 import "server-only";
 
-import { RequestContext } from "@mastra/core/request-context";
-import { conversationalPartyWorkflow } from "@silpo-party/agent/conversational-workflow";
-
+import { env } from "@/lib/env";
 import type { Db } from "@/lib/party/access";
 
 async function loadPartyMembers(db: Db, partyId: string) {
@@ -26,7 +24,10 @@ async function loadPlan(db: Db, partyId: string) {
 }
 
 /**
- * Runs one chat message through @silpo-party/agent's conversational workflow.
+ * Runs one chat message through the separately-deployed agent (apps/agent, its own Vercel project — see
+ * AGENT_URL) via its Mastra-generated REST API, instead of importing the workflow in-process. Authenticated
+ * with a shared-secret bearer token (AGENT_INTERNAL_TOKEN, set identically on both deployments) since the
+ * agent's HTTP API would otherwise let any caller run workflows against an arbitrary Silpo account.
  *
  * hostId is deliberately set to actorId (not party.creator_id): the workflow's own host/actor distinction
  * gates who may edit the shared plan directly vs. only submit preferences, a finer-grained model than this
@@ -48,30 +49,37 @@ export async function runConversationalTurn(db: Db, {
 }) {
   const [members, currentPlan] = await Promise.all([loadPartyMembers(db, partyId), loadPlan(db, partyId)]);
 
-  const requestContext = new RequestContext();
-  requestContext.set("silpoUserId", creatorId);
-
-  const run = await conversationalPartyWorkflow.createRun();
-  const result = await run.start({
-    inputData: {
-      message,
-      actorId,
-      hostId: actorId,
-      scope: "auto",
-      currentParty: { members },
-      currentPlan,
-      budgetUah: null,
-      partyWideRestrictions: [],
-      blockers: [],
-      warnings: [],
-      questions: [],
-      readiness: "invalid",
+  const response = await fetch(`${env("AGENT_URL")}/api/workflows/conversationalPartyWorkflow/start-async`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${env("AGENT_INTERNAL_TOKEN")}`,
     },
-    requestContext,
+    body: JSON.stringify({
+      inputData: {
+        message,
+        actorId,
+        hostId: actorId,
+        scope: "auto",
+        currentParty: { members },
+        currentPlan,
+        budgetUah: null,
+        partyWideRestrictions: [],
+        blockers: [],
+        warnings: [],
+        questions: [],
+        readiness: "invalid",
+      },
+      requestContext: { silpoUserId: creatorId },
+    }),
   });
 
-  if (result.status !== "success") {
-    throw new Error(`Agent turn did not complete (status: ${result.status}).`);
+  if (!response.ok) {
+    throw new Error(`Agent request failed (${response.status}): ${(await response.text()).slice(0, 500)}`);
   }
-  return result.result;
+  const data = await response.json();
+  if (data.status !== "success") {
+    throw new Error(`Agent turn did not complete (status: ${data.status}): ${JSON.stringify(data.error ?? "").slice(0, 500)}`);
+  }
+  return data.result;
 }
