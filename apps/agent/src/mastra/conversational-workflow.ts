@@ -30,6 +30,7 @@ import type { PartyPlanDraft, VerifiedProduct } from "../domain/validation.ts";
 import { validateModeAssignments } from "../domain/modes.ts";
 import { createSilpoGateway } from "../silpo/gateway.ts";
 import { partyPlannerAgent } from "./party-planner-agent.ts";
+import { reportAgentStatus } from "./party-status.ts";
 import { parsePlannerProposal, planSchema } from "./party-planning-workflow.ts";
 import { findRecipe } from "./tools/recipe-tool.ts";
 import { silpoUserId } from "./tools/silpo-tools.ts";
@@ -212,6 +213,9 @@ const conversationalTurn = createStep({
   inputSchema: conversationInputSchema,
   outputSchema: conversationOutputSchema,
   execute: async ({ inputData, requestContext }) => {
+    // Reverts a prior turn in the same drain-loop batch (src/lib/chat/service.ts) back from SEARCHING —
+    // this turn hasn't started searching anything yet.
+    await reportAgentStatus(requestContext, "THINKING");
     let decision: z.infer<typeof conversationDecisionSchema> | undefined;
     try {
       const decisionResponse = await partyPlannerAgent.generate(
@@ -258,6 +262,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
     // Everything below drives multiple free-text LLM calls (recipe/plan JSON isn't schema-constrained by the
     // provider, only Zod-validated after the fact — see parsePlannerProposal). A malformed response anywhere
     // in here must not crash the whole turn; fail soft with the original, unmodified state instead.
+    await reportAgentStatus(requestContext, "SEARCHING");
     try {
       const silpo = createSilpoGateway(silpoUserId(requestContext));
       const recovered = await recoverLookups(inputData.currentPlan as PartyPlanDraft | null, silpo);
