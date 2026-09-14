@@ -131,9 +131,10 @@ async function queryVariants(party: Input["currentParty"]) {
     return Object.fromEntries((response.object?.wishes ?? [])
       .filter((wish) => keys.has(`${wish.memberId}:${wish.wishId}`))
       .map((wish) => [`${wish.memberId}:${wish.wishId}`, wish.queries]));
-  } catch {
+  } catch (error) {
     // discoverWishCandidates falls back to each wish's own text when no variant is supplied, so degrading to
     // {} here is safe — better than crashing the whole turn over an optional search-quality improvement.
+    console.error("queryVariants: failed, falling back to each wish's own text", error);
     return {};
   }
 }
@@ -159,7 +160,8 @@ Respect the supplied scope.\n${JSON.stringify({ message: inputData.message, acto
         { structuredOutput: { schema: conversationDecisionSchema }, requestContext },
       );
       decision = decisionResponse.object;
-    } catch {
+    } catch (error) {
+      console.error("conversationalTurn: decision classification failed", error);
       decision = undefined;
     }
     if (!decision) {
@@ -249,7 +251,8 @@ Respect the supplied scope.\n${JSON.stringify({ message: inputData.message, acto
         questions: result.questions,
         readiness: result.readiness,
       };
-    } catch {
+    } catch (error) {
+      console.error("conversationalTurn: plan mutation failed", error);
       return readOnlyResult(inputData, "Sorry, something went wrong while updating the cart. Please try again.");
     }
   },

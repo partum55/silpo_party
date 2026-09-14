@@ -13,7 +13,12 @@ import {
 } from "./tools/silpo-tools.ts";
 
 export const mastra = new Mastra({
-  deployer: new VercelDeployer(),
+  // A chat turn can chain several LLM calls plus Silpo MCP round-trips (schema discovery, cart context,
+  // timeslot check, search, hydrate — repeated per tool call up to maxSteps: 20). That easily exceeds a
+  // default serverless timeout, which would kill the function mid-run and leave the party's agent_status
+  // stuck at THINKING forever (the compare-and-swap lock in chat/service.ts only releases from
+  // IDLE/DONE/ERROR). Vercel clamps this to whatever the plan actually allows, so requesting more here is safe.
+  deployer: new VercelDeployer({ maxDuration: 300 }),
   agents: { partyPlannerAgent },
   workflows: { partyPlanningWorkflow, conversationalPartyWorkflow },
   tools: { silpoSearchProducts, silpoGetProductDetails, silpoGetSimilarProducts, silpoGetReplacements, findRecipeTool },

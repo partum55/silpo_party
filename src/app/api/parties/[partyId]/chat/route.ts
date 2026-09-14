@@ -4,6 +4,10 @@ import { requireUser } from "@/lib/auth";
 import { toErrorResponse } from "@/lib/api/errors";
 import { listMessages, sendMessage } from "@/lib/chat/service";
 
+// POST synchronously waits for a full agent turn (LLM + Silpo MCP round-trips) — default serverless
+// timeouts are too short for that. Vercel clamps to whatever the plan allows.
+export const maxDuration = 300;
+
 type Context = { params: Promise<{ partyId: string }> };
 
 export async function GET(_request: Request, { params }: Context) {
