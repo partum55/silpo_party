@@ -1,0 +1,26 @@
+{
+  "name": "@silpo-party/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "mastra dev --env ../../.env.local",
+    "build": "mastra build",
+    "test": "node --test --experimental-strip-types tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "3.0.48",
+    "@mastra/core": "1.66.0",
+    "@silpo-party/silpo-mcp": "*",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "mastra": "1.29.0",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

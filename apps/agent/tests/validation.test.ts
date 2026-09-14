@@ -1,0 +1,309 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  coverageTargets,
+  validateProposal,
+  type HydratedProduct,
+} from "../src/domain/validation.ts";
+import type { PartyPlanningInput, PlannerProposal } from "../src/domain/schemas.ts";
+
+const members = [
+  { id: "a", name: "Anna", restrictions: ["vegetarian"] },
+  { id: "b", name: "Bohdan", restrictions: [] },
+];
+
+const input: PartyPlanningInput = {
+  request: "Party for 2 people, budget 100 UAH",
+  currentParty: { members },
+};
+
+const products: Record<string, HydratedProduct> = {
+  vegetables: {
+    id: "vegetables",
+    name: "Vegetable platter 800 g",
+    priceUah: 80,
+    unit: "pack",
+    available: true,
+    category: "food",
+    packageSize: { amount: 800, unit: "g" },
+    metadata: { ingredients: ["tomato", "cucumber", "pepper"], allergens: [], labels: [] },
+  },
+  juice: {
+    id: "juice",
+    name: "Apple juice 1.5 l",
+    priceUah: 70,
+    unit: "bottle",
+    available: true,
+    category: "drink",
+    packageSize: { amount: 1500, unit: "ml" },
+    metadata: { ingredients: ["apple juice"], allergens: [], labels: ["vegan"] },
+  },
+  meat: {
+    id: "meat",
+    name: "Chicken platter 800 g",
+    priceUah: 120,
+    unit: "pack",
+    available: true,
+    category: "food",
+    packageSize: { amount: 800, unit: "g" },
+    metadata: { ingredients: ["chicken", "salt"], allergens: [], labels: [] },
+  },
+  grapes: {
+    id: "grapes",
+    name: "Виноград ваговий",
+    priceUah: 69.9,
+    unit: "кг",
+    available: true,
+    weighted: true,
+    category: "food",
+    packageSize: { amount: 100, unit: "g" },
+    metadata: { ingredients: ["виноград"], allergens: [], labels: [] },
+  },
+  water: {
+    id: "water",
+    name: "Вода мінеральна негазована",
+    priceUah: 30,
+    unit: "шт",
+    available: true,
+    category: "drink",
+    packageSize: { amount: 750, unit: "ml" },
+    metadata: { ingredients: [], allergens: [], labels: [], composition: [] },
+  },
+  tomatoes: {
+    id: "tomatoes",
+    name: "Томати рожеві",
+    priceUah: 60,
+    unit: "кг",
+    available: true,
+    weighted: true,
+    category: "food",
+    packageSize: { amount: 300, unit: "g" },
+    metadata: { ingredients: [], allergens: [], labels: [], composition: [] },
+  },
+  almonds: {
+    id: "almonds",
+    name: "Мигдаль сирий",
+    priceUah: 80,
+    unit: "шт",
+    available: true,
+    category: "food",
+    packageSize: { amount: 100, unit: "g" },
+    metadata: { ingredients: [], allergens: ["мигдаль"], labels: [], composition: [] },
+  },
+  ambiguous: {
+    id: "ambiguous",
+    name: "Закуска фірмова",
+    priceUah: 90,
+    unit: "шт",
+    available: true,
+    category: "food",
+    packageSize: { amount: 400, unit: "g" },
+    metadata: { ingredients: [], allergens: [], labels: [], composition: [] },
+  },
+  veganPrepared: {
+    id: "veganPrepared",
+    name: "Тофники з тофу веганські",
+    priceUah: 120,
+    unit: "шт",
+    available: true,
+    category: "food",
+    packageSize: { amount: 400, unit: "g" },
+    metadata: { ingredients: [], allergens: ["соя"], labels: [], composition: [] },
+  },
+  fruitJuice: {
+    id: "fruitJuice",
+    name: "Сік яблучний",
+    priceUah: 50,
+    unit: "шт",
+    available: true,
+    category: "drink",
+    packageSize: { amount: 750, unit: "ml" },
+    metadata: { ingredients: [], allergens: [], labels: [], composition: [] },
+  },
+};
+
+function proposal(selections: PlannerProposal["selections"]): PlannerProposal {
+  return { summary: "Draft", selections };
+}
+
+const hydrate = async (id: string) => products[id] ?? null;
+
+test("hydrates product facts and calculates a soft-budget warning", async () => {
+  const result = await validateProposal({
+    input,
+    budgetUah: 100,
+    partyWideRestrictions: [],
+    proposal: proposal([
+      { productId: "vegetables", quantity: 2, assignedMemberIds: ["a", "b"], reason: "Food" },
+      { productId: "juice", quantity: 1, assignedMemberIds: ["a", "b"], reason: "Drinks" },
+    ]),
+    hydrate,
+  });
+
+  assert.equal(result.readiness, "ready");
+  assert.equal(result.totalUah, 230);
+  assert.deepEqual(result.warnings.find((warning) => warning.code === "budget_exceeded")?.amountUah, 130);
+  assert.equal(result.selectedProducts[0].name, "Vegetable platter 800 g");
+  assert.equal(result.draft.summary, "Party plan for 2 participants with 2 verified Silpo products.");
+  assert.equal(result.selectedProducts[0].reason, "Assigned to 2 participants.");
+});
+
+test("rejects a plausible fabricated product id", async () => {
+  const result = await validateProposal({
+    input,
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([
+      { productId: "4820001234567", quantity: 1, assignedMemberIds: ["a", "b"], reason: "Looks real" },
+    ]),
+    hydrate,
+  });
+
+  assert.equal(result.readiness, "invalid");
+  assert.equal(result.selectedProducts.length, 0);
+  assert.equal(result.blockers[0]?.code, "product_not_found");
+});
+
+test("validates restriction safety and coverage per participant", async () => {
+  const result = await validateProposal({
+    input,
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([
+      { productId: "vegetables", quantity: 1, assignedMemberIds: ["a"], reason: "Vegetarian food" },
+      { productId: "meat", quantity: 1, assignedMemberIds: ["b"], reason: "Food" },
+      { productId: "juice", quantity: 1, assignedMemberIds: ["a", "b"], reason: "Drinks" },
+    ]),
+    hydrate,
+  });
+
+  assert.equal(result.readiness, "ready");
+  assert.deepEqual(result.coverage.a, { foodGrams: 800, drinkMilliliters: 750 });
+  assert.deepEqual(result.coverage.b, { foodGrams: 800, drinkMilliliters: 750 });
+});
+
+test("unknown restriction evidence cannot count toward coverage", async () => {
+  const result = await validateProposal({
+    input: {
+      ...input,
+      currentParty: { members: [{ id: "a", restrictions: ["nut allergy"] }] },
+    },
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([
+      { productId: "vegetables", quantity: 1, assignedMemberIds: ["a"], reason: "Food" },
+      { productId: "juice", quantity: 1, assignedMemberIds: ["a"], reason: "Drinks" },
+    ]),
+    hydrate,
+  });
+
+  assert.equal(result.readiness, "invalid");
+  assert.ok(result.blockers.some((blocker) => blocker.code === "restriction_unverified"));
+});
+
+test("coverage targets are injectable heuristics", async () => {
+  const result = await validateProposal({
+    input,
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([
+      { productId: "vegetables", quantity: 1, assignedMemberIds: ["a", "b"], reason: "Food" },
+      { productId: "juice", quantity: 1, assignedMemberIds: ["a", "b"], reason: "Drinks" },
+    ]),
+    hydrate,
+    targets: { ...coverageTargets, foodGramsPerPerson: 401 },
+  });
+
+  assert.equal(result.readiness, "invalid");
+  assert.ok(result.blockers.some((blocker) => blocker.code === "insufficient_food"));
+});
+
+test("weighted 100 g pricing units use 100 g for price and coverage", async () => {
+  const weightedInput: PartyPlanningInput = {
+    request: "Fruit",
+    currentParty: { members: [{ id: "a", restrictions: [] }] },
+  };
+  const result = await validateProposal({
+    input: weightedInput,
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([
+      { productId: "grapes", quantity: 1, assignedMemberIds: ["a"], reason: "Fruit" },
+    ]),
+    hydrate,
+    targets: { foodGramsPerPerson: 100, drinkMillilitersPerPerson: 0 },
+  });
+
+  assert.equal(result.selectedProducts[0]?.lineTotalUah, 69.9);
+  assert.deepEqual(result.selectedProducts[0]?.packageSize, { amount: 100, unit: "g" });
+  assert.equal(result.coverage.a.foodGrams, 100);
+  assert.equal(result.readiness, "ready");
+});
+
+test("vegetarian verification accepts plain water, tomatoes, and almonds", async () => {
+  const result = await validateProposal({
+    input: { request: "Vegetarian party", currentParty: { members: [{ id: "a", restrictions: ["vegetarian"] }] } },
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([
+      { productId: "water", quantity: 1, assignedMemberIds: ["a"], reason: "Drink" },
+      { productId: "tomatoes", quantity: 1, assignedMemberIds: ["a"], reason: "Food" },
+      { productId: "almonds", quantity: 1, assignedMemberIds: ["a"], reason: "Food" },
+    ]),
+    hydrate,
+  });
+
+  assert.deepEqual(result.coverage.a, { foodGrams: 400, drinkMilliliters: 750 });
+  assert.equal(result.readiness, "ready");
+});
+
+test("obvious meat is unsafe only for the restricted participant", async () => {
+  const result = await validateProposal({
+    input: { request: "Mixed party", currentParty: { members } },
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([
+      { productId: "meat", quantity: 1, assignedMemberIds: ["a", "b"], reason: "Food" },
+      { productId: "water", quantity: 2, assignedMemberIds: ["a", "b"], reason: "Drink" },
+    ]),
+    hydrate,
+  });
+
+  assert.deepEqual(result.coverage.a, { foodGrams: 0, drinkMilliliters: 750 });
+  assert.deepEqual(result.coverage.b, { foodGrams: 400, drinkMilliliters: 750 });
+  assert.ok(result.blockers.some((blocker) => blocker.code === "restriction_violation" && blocker.memberId === "a"));
+  assert.ok(result.blockers.every((blocker) => blocker.memberId !== "b"));
+});
+
+test("ambiguous processed food without evidence remains unverified", async () => {
+  const result = await validateProposal({
+    input: { request: "Vegetarian party", currentParty: { members: [{ id: "a", restrictions: ["vegetarian"] }] } },
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([
+      { productId: "ambiguous", quantity: 1, assignedMemberIds: ["a"], reason: "Food" },
+      { productId: "water", quantity: 1, assignedMemberIds: ["a"], reason: "Drink" },
+    ]),
+    hydrate,
+  });
+
+  assert.equal(result.coverage.a.foodGrams, 0);
+  assert.ok(result.blockers.some((blocker) => blocker.code === "restriction_unverified" && blocker.productId === "ambiguous"));
+});
+
+test("explicit vegan names and clearly identified fruit juice are vegetarian-safe", async () => {
+  const result = await validateProposal({
+    input: { request: "Vegetarian party", currentParty: { members: [{ id: "a", restrictions: ["vegetarian"] }] } },
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([
+      { productId: "veganPrepared", quantity: 1, assignedMemberIds: ["a"], reason: "Food" },
+      { productId: "fruitJuice", quantity: 1, assignedMemberIds: ["a"], reason: "Drink" },
+    ]),
+    hydrate,
+  });
+
+  assert.deepEqual(result.coverage.a, { foodGrams: 400, drinkMilliliters: 750 });
+  assert.equal(result.readiness, "ready");
+});

@@ -1,0 +1,11 @@
+{
+  "name": "@silpo-party/silpo-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@supabase/supabase-js": "2.116.0"
+  }
+}
