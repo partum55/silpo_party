@@ -18,6 +18,7 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.48",
     "@mastra/core": "1.66.0",
+    "@mastra/deployer-vercel": "1.2.25",
     "@silpo-party/silpo-mcp": "*",
     "zod": "4.6.5"
   },

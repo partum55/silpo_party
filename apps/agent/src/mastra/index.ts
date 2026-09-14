@@ -1,5 +1,6 @@
 import { Mastra } from "@mastra/core/mastra";
 import { SimpleAuth } from "@mastra/core/server";
+import { VercelDeployer } from "@mastra/deployer-vercel";
 
 import { partyPlannerAgent } from "./party-planner-agent.ts";
 import { conversationalPartyWorkflow } from "./conversational-workflow.ts";
@@ -16,13 +17,16 @@ const internalToken = process.env.AGENT_INTERNAL_TOKEN;
 const internalUsers = internalToken
   ? { [internalToken]: { id: "web-backend", name: "Silpo Party Studio", role: "admin" } }
   : {};
-
 export const mastra = new Mastra({
   // A chat turn can chain several LLM calls plus Silpo MCP round-trips (schema discovery, cart context,
   // timeslot check, search, hydrate — repeated per tool call up to maxSteps: 20). That easily exceeds a
   // default serverless timeout, which would kill the function mid-run and leave the party's agent_status
   // stuck at THINKING forever (the compare-and-swap lock in chat/service.ts only releases from
   // IDLE/DONE/ERROR). The standalone service avoids a serverless invocation deadline.
+  // The agent is currently deployed as its own Vercel project. Without this deployer, `mastra build`
+  // succeeds but emits only the standalone `.mastra/output` server; Vercel then creates an empty-looking
+  // "Ready" deployment where every route returns its platform-level NOT_FOUND response.
+  deployer: new VercelDeployer({ maxDuration: 300 }),
   agents: { partyPlannerAgent },
   workflows: { partyPlanningWorkflow, conversationalPartyWorkflow },
   tools: { silpoSearchProducts, silpoGetProductDetails, silpoGetSimilarProducts, silpoGetReplacements, findRecipeTool },

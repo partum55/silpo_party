@@ -1,11 +1,12 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { access, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const outputDirectory = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../.mastra/output",
-);
+const agentDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const outputDirectories = [
+  path.join(agentDirectory, ".mastra", "output"),
+  path.join(agentDirectory, ".vercel", "output", "functions"),
+];
 
 async function fixDirectory(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -26,4 +27,11 @@ async function fixDirectory(directory) {
   }
 }
 
-await fixDirectory(outputDirectory);
+for (const outputDirectory of outputDirectories) {
+  try {
+    await access(outputDirectory);
+    await fixDirectory(outputDirectory);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
