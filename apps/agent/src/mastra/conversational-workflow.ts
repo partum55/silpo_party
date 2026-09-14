@@ -122,14 +122,20 @@ async function queryVariants(party: Input["currentParty"]) {
     .map((wish) => ({ memberId: member.id, wishId: wish.id, text: wish.text })));
   if (!wishes.length) return {};
   const schema = z.object({ wishes: z.array(z.object({ memberId: z.string(), wishId: z.string(), queries: z.array(z.string()).max(2) })) });
-  const response = await partyPlannerAgent.generate(
-    `Return a JSON object with up to two short Silpo search variants for every supplied wish. Preserve IDs exactly.\n${JSON.stringify(wishes)}`,
-    { structuredOutput: { schema } },
-  );
-  const keys = new Set(wishes.map((wish) => `${wish.memberId}:${wish.wishId}`));
-  return Object.fromEntries(response.object.wishes
-    .filter((wish) => keys.has(`${wish.memberId}:${wish.wishId}`))
-    .map((wish) => [`${wish.memberId}:${wish.wishId}`, wish.queries]));
+  try {
+    const response = await partyPlannerAgent.generate(
+      `Return a JSON object with exactly one key "wishes": an array with, for every supplied wish, exactly {"memberId": string, "wishId": string, "queries": string[]} (up to two short Silpo search variants). Preserve memberId and wishId exactly.\n${JSON.stringify(wishes)}`,
+      { structuredOutput: { schema } },
+    );
+    const keys = new Set(wishes.map((wish) => `${wish.memberId}:${wish.wishId}`));
+    return Object.fromEntries((response.object?.wishes ?? [])
+      .filter((wish) => keys.has(`${wish.memberId}:${wish.wishId}`))
+      .map((wish) => [`${wish.memberId}:${wish.wishId}`, wish.queries]));
+  } catch {
+    // discoverWishCandidates falls back to each wish's own text when no variant is supplied, so degrading to
+    // {} here is safe — better than crashing the whole turn over an optional search-quality improvement.
+    return {};
+  }
 }
 
 const conversationalTurn = createStep({
@@ -138,14 +144,27 @@ const conversationalTurn = createStep({
   inputSchema: conversationInputSchema,
   outputSchema: conversationOutputSchema,
   execute: async ({ inputData, requestContext }) => {
-    const decisionResponse = await partyPlannerAgent.generate(
-      `Classify one party conversation message and return a JSON object matching the decision schema. Questions are read_only and must have no operations. Preference messages produce incremental add/remove/replace/reset operations only for the actor; never return a complete wish list and never change participant status. Plan commands produce only add/remove/replace plan operations. Respect the supplied scope. Product and recipe targetId values must come from currentPlan.\n${JSON.stringify({ message: inputData.message, actorId: inputData.actorId, hostId: inputData.hostId, scope: inputData.scope, currentParty: inputData.currentParty, currentPlan: inputData.currentPlan })}`,
-      { structuredOutput: { schema: conversationDecisionSchema }, requestContext },
-    );
-    const decision = decisionResponse.object;
+    let decision: z.infer<typeof conversationDecisionSchema> | undefined;
+    try {
+      const decisionResponse = await partyPlannerAgent.generate(
+        `Classify one party conversation message. Return a JSON object with exactly these keys and no others: {"intent": "read_only"|"preference_mutation"|"plan_mutation", "preferenceOperations": array, "planOperations": array, "readQuestion": "cost"|"summary"|"member"|"recipes"|"other"|null}.
+
+If intent is "read_only": preferenceOperations and planOperations must both be [], and readQuestion must be set (not null). Questions are read_only and must have no operations.
+
+If intent is "preference_mutation": planOperations must be [], readQuestion must be null. Each preferenceOperations item is exactly one of {"action":"add","text":string,"fulfillmentStrategy"?:"ready_made"|"recipe"|"either"}, {"action":"replace","wishId":string,"text":string,"fulfillmentStrategy"?:"ready_made"|"recipe"|"either"}, {"action":"remove","wishId":string}, or {"action":"reset"}. Produce incremental add/remove/replace/reset operations only for the actor; never return a complete wish list and never change participant status.
+
+If intent is "plan_mutation": preferenceOperations must be [], readQuestion must be null, planOperations must be non-empty. Each planOperations item is exactly one of {"action":"add","request":string,"assignedMemberIds":string[]}, {"action":"remove","targetType":"product"|"recipe","targetId":string}, or {"action":"replace","targetType":"product"|"recipe","targetId":string,"request":string}. targetId values must come from currentPlan.
+
+Respect the supplied scope.\n${JSON.stringify({ message: inputData.message, actorId: inputData.actorId, hostId: inputData.hostId, scope: inputData.scope, currentParty: inputData.currentParty, currentPlan: inputData.currentPlan })}`,
+        { structuredOutput: { schema: conversationDecisionSchema }, requestContext },
+      );
+      decision = decisionResponse.object;
+    } catch {
+      decision = undefined;
+    }
     if (!decision) {
-      // The model's JSON didn't satisfy conversationDecisionSchema's strict validation (e.g. a superRefine
-      // rule), so structuredOutput came back without a parsed object. Fail soft instead of crashing the turn.
+      // The model's JSON didn't satisfy conversationDecisionSchema's validation (structuredOutput throws in
+      // that case rather than returning an object) — fail soft instead of crashing the whole turn.
       return readOnlyResult(inputData, "Sorry, I couldn't understand that message. Could you rephrase it?");
     }
     const applied = applyConversationDecision({
