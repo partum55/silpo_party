@@ -32,9 +32,14 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
-.vercel
+/.vercel/
+
+# supabase cli
+/supabase/.branches/
+/supabase/.temp/
 
 # typescript
 *.tsbuildinfo
@@ -43,3 +48,9 @@ next-env.d.ts
 # MemPalace per-project files (issue #185)
 mempalace.yaml
 entities.json
+
+# local agent tooling
+/.agents/
+/.codex/
+/docs/superpowers/
+/graphify-out/
