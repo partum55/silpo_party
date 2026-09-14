@@ -40,6 +40,7 @@ export const productSchema = z.object({
     labels: z.array(z.string()),
     composition: z.array(z.string()).optional(),
   }),
+  // Kept permissive for legacy persisted plans; every newly generated planner selection is integer-validated.
   quantity: z.number().positive(),
   assignedMemberIds: z.array(z.string()),
   reason: z.string(),
@@ -105,6 +106,7 @@ const wishCandidateSetSchema = z.object({
 
 const stateSchema = z.object({
   request: z.string(),
+  mode: z.enum(["SHOPPING", "DINNER", "EVENT"]),
   currentParty: z.object({ members: z.array(memberSchema).max(10) }),
   participantCount: z.number().int().min(0).max(10),
   budgetUah: z.number().nonnegative().nullable(),
@@ -219,13 +221,15 @@ const planAndValidate = createStep({
           `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "quantity": number, "assignedMemberIds": string[], "reason": string}], "recipes": [{"title": string, "source": "web"|"generated", "sourceUrl": string|null, "servings": number, "assignedMemberIds": string[], "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece", "productId": string}], "steps": string[]}], "wishFulfillments": [{"memberId": string, "wishId": string, "resolvedStrategy": "ready_made"|"recipe", "selectedProductIds": string[], "recipeTitle": string|null, "fallbackReason": "explicit_cooking"|"no_candidates"|"no_safe_candidate"|"poor_match"|null}]}. Always include all three arrays. Do not rename fields or add other keys. Candidate lookupProductIds are the only IDs allowed for ready-made wish fulfillment. Rank the full hydrated candidate set rather than automatically choosing its first item. A wish may use several candidates for variety. Consider participant preferences, participant-specific restrictions, price, quantity, variety, and closeness to the wish.
 
 Current party and request:
-${JSON.stringify({ request: state.request, members: state.currentParty.members, participantCount: state.currentParty.members.length, budgetUah: state.budgetUah, partyWideRestrictions: state.restrictions, coverageTargets, wishCandidates: state.wishCandidates })}
+${JSON.stringify({ mode: state.mode, request: state.request, members: state.currentParty.members, participantCount: state.currentParty.members.length, budgetUah: state.budgetUah, partyWideRestrictions: state.restrictions, coverageTargets, wishCandidates: state.wishCandidates })}
+
+Mode rules: SHOPPING means direct requested products assigned only to their requester and no recipes. DINNER means requested dishes become recipes and pantry staples (salt, pepper, water, cooking oil) are omitted. EVENT means autonomously cover essentials first (main food, one side, drinks, and a suitable sauce), assign shared purchases to all participants, and add optional snacks or extras only when the remaining budget comfortably allows them. In every mode, prefer lower-priced suitable verified products, minimize package waste, and treat a supplied budget as a strong constraint.
 
 Member wishes are current planning preferences. Member status is UI-owned context only; never infer or change it from message text.
 
 For ready_made, choose suitable candidate products or leave the wish blocked. For either, prefer suitable ready-made candidates; use a recipe only for no_candidates, no_safe_candidate, or a genuine poor_match. For recipe, skip ready-made fulfillment and use explicit_cooking. Recipe resolution is a fallback strategy, not the default for named dishes. These rules apply generally; never special-case a dish.
 
-Coverage uses hydrated package amount × quantity, divided among every assigned member. Meet both targets for each member; on repair, replace unverified products and increase quantities where coverage is short.
+Quantity is always a positive integer count of the product's displayed purchasable increment/package, never kilograms or a raw recipe amount. For example, if Silpo sells tomatoes in 100 g increments and 250 g is needed, select quantity 3. Coverage uses hydrated package amount × quantity, divided among every assigned member. Meet both targets for each member; on repair, replace unverified products and increase quantities where coverage is short.
 
 Deterministic validation failures from the previous attempt:
 ${JSON.stringify(previousBlockers)}`,

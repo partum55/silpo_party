@@ -12,7 +12,7 @@ test("planner JSON is parsed and validated after tool use", () => {
 test("workflow starts from its public input without duplicate initial state", async () => {
   const run = await mastra.getWorkflow("partyPlanningWorkflow").createRun();
   const result = await run.start({
-    inputData: { request: "Plan a party", currentParty: { members: [] } },
+    inputData: { request: "Plan a party", mode: "EVENT", budgetUah: null, currentParty: { members: [] } },
   });
 
   assert.equal(result.status, "success");

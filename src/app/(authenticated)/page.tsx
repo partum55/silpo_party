@@ -23,14 +23,27 @@ export default async function Home({
 
       <section className="space-y-2">
         <h2 className="font-medium">Створити вечірку</h2>
-        <form action={createPartyAction} className="flex gap-2">
+        <form action={createPartyAction} className="grid gap-2 sm:grid-cols-2">
           <input
             name="name"
             placeholder="Назва вечірки"
             required
-            className="flex-1 rounded border px-3 py-2"
+            className="rounded border px-3 py-2 sm:col-span-2"
           />
-          <button type="submit" className="rounded bg-black px-4 py-2 text-white">
+          <select name="mode" defaultValue="EVENT" className="rounded border px-3 py-2">
+            <option value="SHOPPING">Закупка товарів</option>
+            <option value="DINNER">Приготувати вечерю</option>
+            <option value="EVENT">Запланувати подію</option>
+          </select>
+          <input
+            name="budgetUah"
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="Загальний бюджет, грн"
+            className="rounded border px-3 py-2"
+          />
+          <button type="submit" className="rounded bg-black px-4 py-2 text-white sm:col-span-2">
             Створити
           </button>
         </form>
@@ -60,7 +73,7 @@ export default async function Home({
               <a href={`/parties/${party.id}`} className="block rounded border p-3 hover:bg-zinc-50">
                 <span className="font-medium">{party.name as string}</span>{" "}
                 <span className="text-sm text-zinc-500">
-                  ({party.role === "CREATOR" ? "творець" : "учасник"}, {party.status as string})
+                  ({party.role === "CREATOR" ? "творець" : "учасник"}, {party.mode as string}, {party.status as string})
                 </span>
               </a>
             </li>

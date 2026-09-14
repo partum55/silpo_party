@@ -3,9 +3,10 @@ import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 import { generateJoinCode } from "./join-code";
-import { assertOk, checkCreate, checkDelete, checkJoin, checkLeave, checkRead, MAX_ACTIVE_PARTIES_PER_USER } from "./rules";
+import { assertOk, checkActiveMemberAction, checkCreate, checkDelete, checkJoin, checkLeave, checkRead, MAX_ACTIVE_PARTIES_PER_USER } from "./rules";
 
 type Db = ReturnType<typeof createSupabaseAdminClient>;
+export type PartyMode = "SHOPPING" | "DINNER" | "EVENT";
 
 async function activePartyCount(db: Db, userId: string) {
   const { count, error } = await db
@@ -34,7 +35,7 @@ async function getPartyStatus(db: Db, partyId: string) {
   return (data?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null;
 }
 
-export async function createParty(userId: string, name: string) {
+export async function createParty(userId: string, name: string, mode: PartyMode, budgetUah: number | null) {
   const db = createSupabaseAdminClient();
   assertOk(checkCreate({ activePartyCountForUser: await activePartyCount(db, userId) }));
 
@@ -42,7 +43,7 @@ export async function createParty(userId: string, name: string) {
     const joinCode = generateJoinCode();
     const { data: party, error } = await db
       .from("parties")
-      .insert({ creator_id: userId, name, join_code: joinCode })
+      .insert({ creator_id: userId, name, join_code: joinCode, mode, budget_uah: budgetUah })
       .select()
       .single();
     if (error) {
@@ -58,6 +59,16 @@ export async function createParty(userId: string, name: string) {
     return party;
   }
   throw new Error("Could not generate a unique join code after several attempts.");
+}
+
+export async function updatePartyBudget(partyId: string, userId: string, budgetUah: number | null) {
+  const db = createSupabaseAdminClient();
+  const { data: party, error } = await db.from("parties").select("creator_id, status").eq("id", partyId).maybeSingle();
+  if (error) throw error;
+  assertOk(checkDelete({ isCreator: party?.creator_id === userId }));
+  assertOk(checkActiveMemberAction({ isMember: true, partyStatus: (party?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null }));
+  const { error: updateError } = await db.from("parties").update({ budget_uah: budgetUah }).eq("id", partyId);
+  if (updateError) throw updateError;
 }
 
 export async function listMyParties(userId: string) {

@@ -235,7 +235,7 @@ test("weighted 100 g pricing units use 100 g for price and coverage", async () =
     targets: { foodGramsPerPerson: 100, drinkMillilitersPerPerson: 0 },
   });
 
-  assert.equal(result.selectedProducts[0]?.lineTotalUah, 69.9);
+  assert.equal(result.selectedProducts[0]?.lineTotalUah, 6.99);
   assert.deepEqual(result.selectedProducts[0]?.packageSize, { amount: 100, unit: "g" });
   assert.equal(result.coverage.a.foodGrams, 100);
   assert.equal(result.readiness, "ready");

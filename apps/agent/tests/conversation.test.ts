@@ -116,6 +116,30 @@ test("adding to an existing plan preserves every unaffected selection", () => {
   assert.deepEqual(merged.selections.slice(0, 2), planToProposal(currentPlan).selections);
 });
 
+test("shopping keeps the same SKU as a distinct per-member charge", () => {
+  const currentPlan = existingPlan();
+  const merged = mergeWithProtectedPlan({
+    baseline: planToProposal(currentPlan),
+    proposed: {
+      summary: "Another chips request",
+      selections: [{ productId: "chips", quantity: 1, assignedMemberIds: ["b"], reason: "Requested by b" }],
+      recipes: [],
+      wishFulfillments: [],
+    },
+    currentPlan,
+    affectedWishKeys: [],
+    planOperations: [{ action: "add", request: "chips", assignedMemberIds: ["b"] }],
+    keepDistinctAdditions: true,
+  });
+
+  assert.deepEqual(merged.selections.filter((item) => item.productId === "chips").map((item) => item.assignedMemberIds), [["a"], ["b"]]);
+  const after = {
+    ...currentPlan,
+    products: [...currentPlan.products, { ...product("chips"), assignedMemberIds: ["b"] }],
+  };
+  assert.deepEqual(validatePlanOperations(currentPlan, after, [{ action: "add", request: "chips", assignedMemberIds: ["b"] }]), []);
+});
+
 test("direct plan additions must produce a new assigned component", () => {
   const currentPlan = existingPlan();
   const operation = { action: "add" as const, request: "щось для Анни", assignedMemberIds: ["anna"] };

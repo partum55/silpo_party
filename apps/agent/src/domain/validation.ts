@@ -5,6 +5,7 @@ import type {
   PlannerProposal,
   Warning,
 } from "./schemas.ts";
+import { productLineTotalUah } from "./purchasing.ts";
 
 export const coverageTargets = {
   foodGramsPerPerson: 400,
@@ -83,6 +84,12 @@ type RestrictionResult = "safe" | "unsafe" | "unknown";
 
 const normalize = (values: string[]) => values.join(" ").toLocaleLowerCase("uk");
 
+const pantryStaple = /^(salt|sea salt|black pepper|pepper|water|tap water|olive oil|vegetable oil|cooking oil|сіль|морська сіль|чорний перець|перець|вода|оливкова олія|рослинна олія|олія)$/i;
+
+export function isPantryStaple(name: string) {
+  return pantryStaple.test(name.trim().toLocaleLowerCase("uk"));
+}
+
 const vegetarianAnimal = /chicken|beef|pork|turkey|duck|meat|fish|salmon|tuna|shrimp|seafood|gelatin|lard|курк|ялович|свинин|індич|качк|м['’]?яс|риб|лосос|тунц|кревет|морепродукт|желатин|смалец|бекон|шинка|ковбас|сосиск|анчоус|ікра/;
 const wholePlant = /tomato|potato|cucumber|carrot|cabbage|pepper|onion|garlic|apple|banana|grape|orange|pear|berry|fruit|vegetable|almond|peanut|hazelnut|cashew|pistachio|nut|томат|помідор|картоп|огір|моркв|капуст|перець|цибул|часник|яблук|банан|виноград|апельс|мандарин|груш|ягод|фрукт|овоч|мигдал|арахіс|фундук|кеш['’]?ю|фісташ|горіх/;
 const processedFood = /закуск|салат|соус|піца|сендвіч|бургер|торт|печив|цукерк|десерт|йогурт|чипс|паста|марин|консерв|напівфабрикат|snack|salad|sauce|pizza|sandwich|burger|cake|cookie|candy|dessert|yogurt|chips|flavou?r/;
@@ -148,6 +155,7 @@ export async function validateProposal({
   resolveRecipe,
   wishCandidates = [],
   targets = coverageTargets,
+  mode = "EVENT",
 }: {
   input: PartyPlanningInput;
   budgetUah: number | null;
@@ -162,7 +170,9 @@ export async function validateProposal({
     candidates: Array<{ lookupProductId: string; product: HydratedProduct }>;
   }>;
   targets?: { foodGramsPerPerson: number; drinkMillilitersPerPerson: number };
+  mode?: "SHOPPING" | "DINNER" | "EVENT";
 }) {
+  const effectiveTargets = mode === "EVENT" ? targets : { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 };
   const members = new Map(input.currentParty.members.map((member) => [member.id, member]));
   const coverage = Object.fromEntries(
     input.currentParty.members.map((member) => [member.id, { foodGrams: 0, drinkMilliliters: 0 }]),
@@ -219,7 +229,7 @@ export async function validateProposal({
       quantity: selection.quantity,
       assignedMemberIds: assignedIds,
       reason: `Assigned to ${assignedIds.length} participant${assignedIds.length === 1 ? "" : "s"}.`,
-      lineTotalUah: Math.round(product.priceUah * selection.quantity * 100) / 100,
+      lineTotalUah: productLineTotalUah(product, selection.quantity),
     };
     selectedProducts.push(verified);
     verifiedSelections.set(selection.productId, verified);
@@ -234,18 +244,21 @@ export async function validateProposal({
         continue;
       }
       const productIds = new Map(proposedRecipe.ingredients.map((ingredient) => [ingredient.name.trim().toLocaleLowerCase(), ingredient.productId]));
-      if (sourced.ingredients.some((ingredient) => !productIds.has(ingredient.name.trim().toLocaleLowerCase()))) {
+      const purchasableIngredients = sourced.ingredients.filter((ingredient) => !isPantryStaple(ingredient.name));
+      if (purchasableIngredients.some((ingredient) => !productIds.has(ingredient.name.trim().toLocaleLowerCase()))) {
         blockers.push({ code: "recipe_ingredient_mapping_missing", message: `${sourced.title} does not map every sourced ingredient to a Silpo product.` });
         continue;
       }
       recipe = {
         ...sourced,
         assignedMemberIds: proposedRecipe.assignedMemberIds,
-        ingredients: sourced.ingredients.map((ingredient) => ({
+        ingredients: purchasableIngredients.map((ingredient) => ({
           ...ingredient,
           productId: productIds.get(ingredient.name.trim().toLocaleLowerCase())!,
         })),
       };
+    } else {
+      recipe = { ...recipe, ingredients: recipe.ingredients.filter((ingredient) => !isPantryStaple(ingredient.name)) };
     }
 
     const assignedIds = [...new Set(recipe.assignedMemberIds)];
@@ -305,7 +318,7 @@ export async function validateProposal({
         quantity: purchaseQuantity,
         assignedMemberIds: assignedIds,
         reason: `Ingredient for ${recipe.title}.`,
-        lineTotalUah: Math.round(product.priceUah * purchaseQuantity * 100) / 100,
+        lineTotalUah: productLineTotalUah(product, purchaseQuantity),
       };
       selectedProducts.push(selectedProduct);
       ingredients.push({
@@ -407,10 +420,10 @@ export async function validateProposal({
   }
 
   for (const member of input.currentParty.members) {
-    if (coverage[member.id].foodGrams < targets.foodGramsPerPerson) {
+    if (coverage[member.id].foodGrams < effectiveTargets.foodGramsPerPerson) {
       blockers.push({ code: "insufficient_food", message: `${member.name ?? member.id} does not have enough verified food.`, memberId: member.id });
     }
-    if (coverage[member.id].drinkMilliliters < targets.drinkMillilitersPerPerson) {
+    if (coverage[member.id].drinkMilliliters < effectiveTargets.drinkMillilitersPerPerson) {
       blockers.push({ code: "insufficient_drink", message: `${member.name ?? member.id} does not have enough verified drinks.`, memberId: member.id });
     }
   }

@@ -8,17 +8,25 @@ import {
   preferencesFromParty,
   validatePlanOperations,
 } from "../domain/conversation.ts";
-import { createInitialState, discoverWishCandidates, runPlanningLoop } from "../domain/planning.ts";
+import {
+  applyGatheredContext,
+  createInitialState,
+  discoverWishCandidates,
+  mentionedParticipantCount,
+  runPlanningLoop,
+} from "../domain/planning.ts";
 import {
   blockerSchema,
   conversationDecisionSchema,
   memberSchema,
+  planningModeSchema,
   planOperationSchema,
   questionSchema,
   warningSchema,
   wishChangeSchema,
 } from "../domain/schemas.ts";
 import type { PartyPlanDraft, VerifiedProduct } from "../domain/validation.ts";
+import { validateModeAssignments } from "../domain/modes.ts";
 import { createSilpoGateway } from "../silpo/gateway.ts";
 import { partyPlannerAgent } from "./party-planner-agent.ts";
 import { parsePlannerProposal, planSchema } from "./party-planning-workflow.ts";
@@ -27,6 +35,7 @@ import { silpoUserId } from "./tools/silpo-tools.ts";
 
 export const conversationInputSchema = z.object({
   message: z.string().min(1),
+  mode: planningModeSchema.default("EVENT"),
   actorId: z.string().min(1),
   hostId: z.string().min(1),
   scope: z.enum(["preferences", "plan", "auto"]).default("auto"),
@@ -61,6 +70,56 @@ export const conversationOutputSchema = z.object({
 
 type Input = z.output<typeof conversationInputSchema>;
 type Gateway = ReturnType<typeof createSilpoGateway>;
+
+function modeInstructions(mode: Input["mode"], actorId: string, memberIds: string[], budgetUah: number | null) {
+  const budgetInstruction = budgetUah === null
+    ? "Prefer lower-priced suitable verified products and avoid unnecessary extras."
+    : `The total budget is ${budgetUah} UAH. Treat it as a strong constraint: choose lower-priced suitable verified products, minimize package waste, add essentials first, and omit optional extras before exceeding it.`;
+  if (mode === "SHOPPING") {
+    return `SHOPPING mode: interpret purchase requests as direct product additions, never as recipes. Assign every newly requested product only to actor ${actorId}, and preserve other participants' products. ${budgetInstruction}`;
+  }
+  if (mode === "DINNER") {
+    return `DINNER mode: participants request dishes. Use recipes, combine the purchasable ingredients, assign each recipe to its requesters, and never buy pantry staples such as salt, pepper, water, or cooking oil. ${budgetInstruction}`;
+  }
+  return `EVENT mode: autonomously plan the event for all participants (${memberIds.join(", ")}). Cover essentials first: main food, a side, drinks, and a suitable sauce. Add snacks or other optional extras only when the remaining budget comfortably allows them. Assign shared purchases to everyone. ${budgetInstruction}`;
+}
+
+function normalizeDecisionForMode(input: Input, value: z.infer<typeof conversationDecisionSchema>) {
+  const memberIds = input.currentParty.members.map((member) => member.id);
+  if (input.mode === "DINNER" && value.intent === "preference_mutation") {
+    return {
+      ...value,
+      preferenceOperations: value.preferenceOperations.map((operation) =>
+        operation.action === "add" || operation.action === "replace"
+          ? { ...operation, fulfillmentStrategy: "recipe" as const }
+          : operation),
+    };
+  }
+  if ((input.mode === "SHOPPING" || input.mode === "EVENT") && value.intent === "plan_mutation") {
+    const assignedMemberIds = input.mode === "SHOPPING" ? [input.actorId] : memberIds;
+    return {
+      ...value,
+      planOperations: value.planOperations.map((operation) =>
+        operation.action === "add" ? { ...operation, assignedMemberIds } : operation),
+    };
+  }
+  if ((input.mode === "SHOPPING" || input.mode === "EVENT")
+    && value.intent === "preference_mutation"
+    && value.preferenceOperations.every((operation) => operation.action === "add")) {
+    const assignedMemberIds = input.mode === "SHOPPING" ? [input.actorId] : memberIds;
+    return {
+      intent: "plan_mutation" as const,
+      preferenceOperations: [],
+      planOperations: value.preferenceOperations.map((operation) => ({
+        action: "add" as const,
+        request: operation.action === "add" ? operation.text : input.message,
+        assignedMemberIds,
+      })),
+      readQuestion: null,
+    };
+  }
+  return value;
+}
 
 async function recoverLookups(plan: PartyPlanDraft | null, silpo: Gateway) {
   if (!plan) return { plan, unresolvedIds: [] as string[] };
@@ -156,10 +215,12 @@ If intent is "preference_mutation": planOperations must be [], readQuestion must
 
 If intent is "plan_mutation": preferenceOperations must be [], readQuestion must be null, planOperations must be non-empty. Each planOperations item is exactly one of {"action":"add","request":string,"assignedMemberIds":string[]}, {"action":"remove","targetType":"product"|"recipe","targetId":string}, or {"action":"replace","targetType":"product"|"recipe","targetId":string,"request":string}. targetId values must come from currentPlan.
 
-Respect the supplied scope.\n${JSON.stringify({ message: inputData.message, actorId: inputData.actorId, hostId: inputData.hostId, scope: inputData.scope, currentParty: inputData.currentParty, currentPlan: inputData.currentPlan })}`,
+Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId, inputData.currentParty.members.map((member) => member.id), inputData.budgetUah)}\n${JSON.stringify({ message: inputData.message, mode: inputData.mode, actorId: inputData.actorId, hostId: inputData.hostId, scope: inputData.scope, currentParty: inputData.currentParty, currentPlan: inputData.currentPlan })}`,
         { structuredOutput: { schema: conversationDecisionSchema }, requestContext },
       );
-      decision = decisionResponse.object;
+      decision = decisionResponse.object
+        ? normalizeDecisionForMode(inputData, decisionResponse.object)
+        : undefined;
     } catch (error) {
       console.error("conversationalTurn: decision classification failed", error);
       decision = undefined;
@@ -211,18 +272,26 @@ Respect the supplied scope.\n${JSON.stringify({ message: inputData.message, acto
       }
 
       let working = baseline;
-      const state = createInitialState({ request: inputData.message, currentParty: applied.party });
+      let state = createInitialState({
+        request: inputData.message,
+        mode: inputData.mode,
+        budgetUah: inputData.budgetUah,
+        currentParty: applied.party,
+      });
+      state = applyGatheredContext(state, {
+        budgetUah: inputData.budgetUah,
+        partyWideRestrictions: inputData.partyWideRestrictions,
+        participantCountMentioned: inputData.mode === "EVENT" ? mentionedParticipantCount(inputData.message) : null,
+      });
       state.currentPlan = recovered.plan;
-      state.budgetUah = inputData.budgetUah;
-      state.restrictions = inputData.partyWideRestrictions;
       state.wishCandidates = wishCandidates;
       state.blockers = recovered.unresolvedIds.map((productId) => ({ code: "product_not_found", message: `Existing product ${productId} could not be resolved in Silpo.`, productId }));
 
       const result = await runPlanningLoop(state, {
         plan: async ({ previousBlockers }) => {
           const response = await partyPlannerAgent.generate(
-            `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "quantity": number, "assignedMemberIds": string[], "reason": string}], "recipes": [{"title": string, "source": "web"|"generated", "sourceUrl": string|null, "servings": number, "assignedMemberIds": string[], "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece", "productId": string}], "steps": string[]}], "wishFulfillments": [{"memberId": string, "wishId": string, "resolvedStrategy": "ready_made"|"recipe", "selectedProductIds": string[], "recipeTitle": string|null, "fallbackReason": "explicit_cooking"|"no_candidates"|"no_safe_candidate"|"poor_match"|null}]}. Always include all three arrays, even if empty. Do not rename fields, omit fields, or add other keys — every selections/recipes item needs every listed field. Modify only components required by the explicit operations or deterministic blockers below; preserve every unaffected product, recipe, assignment, quantity, and wish fulfillment shown in currentProposal exactly. Never change member status. Use the supplied hydrated wish candidates for wish products; use Silpo tools for direct host additions/replacements and recipe ingredients.\n${JSON.stringify({ message: inputData.message, decision, currentParty: applied.party, currentProposal: working, wishCandidates, blockers: previousBlockers })}`,
-            { maxSteps: 20, requestContext },
+            `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "quantity": number, "assignedMemberIds": string[], "reason": string}], "recipes": [{"title": string, "source": "web"|"generated", "sourceUrl": string|null, "servings": number, "assignedMemberIds": string[], "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece", "productId": string}], "steps": string[]}], "wishFulfillments": [{"memberId": string, "wishId": string, "resolvedStrategy": "ready_made"|"recipe", "selectedProductIds": string[], "recipeTitle": string|null, "fallbackReason": "explicit_cooking"|"no_candidates"|"no_safe_candidate"|"poor_match"|null}]}. Always include all three arrays, even if empty. Do not rename fields, omit fields, or add other keys — every selections/recipes item needs every listed field. Modify only components required by the explicit operations or deterministic blockers below; preserve every unaffected product, recipe, assignment, quantity, and wish fulfillment shown in currentProposal exactly. Never change member status. Use the supplied hydrated wish candidates for wish products; use Silpo tools for direct host additions/replacements and recipe ingredients. Quantity is always a positive integer count of the product's displayed purchasable increment/package, never kilograms or a raw recipe amount. Example: if the catalog increment is 100 g and 250 g is needed, use quantity 3.\n${modeInstructions(inputData.mode, inputData.actorId, applied.party.members.map((member) => member.id), inputData.budgetUah)}\n${JSON.stringify({ message: inputData.message, mode: inputData.mode, budgetUah: inputData.budgetUah, decision, currentParty: applied.party, currentProposal: working, wishCandidates, blockers: previousBlockers })}`,
+            { maxSteps: inputData.mode === "SHOPPING" ? 8 : inputData.mode === "DINNER" ? 16 : 20, requestContext },
           );
           let proposed;
           try {
@@ -241,16 +310,31 @@ Respect the supplied scope.\n${JSON.stringify({ message: inputData.message, acto
             affectedWishKeys: applied.affectedWishKeys,
             planOperations: decision.planOperations,
             invalidProductIds: previousBlockers.flatMap((blocker) => blocker.productId ?? []),
+            keepDistinctAdditions: inputData.mode === "SHOPPING",
           });
           return working;
         },
         hydrate: silpo.hydrate,
         resolveRecipe: findRecipe,
-        postValidate: (draft) => validatePlanOperations(recovered.plan, draft, decision.planOperations),
+        maxRepairAttempts: inputData.mode === "EVENT" ? 2 : 1,
+        postValidate: (draft) => [
+          ...validatePlanOperations(recovered.plan, draft, decision.planOperations),
+          ...validateModeAssignments({
+            mode: inputData.mode,
+            actorId: inputData.actorId,
+            memberIds: applied.party.members.map((member) => member.id),
+            before: recovered.plan,
+            after: draft,
+          }),
+        ],
       });
 
+      const warningText = result.warnings.map((warning) => warning.message).join(" ");
       return {
-        responseText: result.readiness === "ready" ? "Party plan updated." : "I updated the draft, but some items still need attention.",
+        responseText: [
+          result.readiness === "ready" ? "Party plan updated." : "I updated the draft, but some items still need attention.",
+          warningText,
+        ].filter(Boolean).join(" "),
         intent: decision.intent,
         preferenceOperations: decision.intent === "preference_mutation" ? decision.preferenceOperations : [],
         planOperations: decision.intent === "plan_mutation" ? decision.planOperations : [],

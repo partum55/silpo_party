@@ -5,6 +5,7 @@ import { after } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { runConversationalTurn } from "@/lib/agent/runner";
 import { syncCartFromPlan } from "@/lib/cart/service";
+import { formatUnknownError } from "@/lib/errors";
 import { assertOk, checkActiveMemberAction, checkRead } from "@/lib/party/rules";
 import { getMembership, getPartyRow, type Db } from "@/lib/party/access";
 
@@ -38,8 +39,8 @@ export async function sendMessage(partyId: string, userId: string, content: stri
   // Runs after this response is sent (Next.js after()) instead of being awaited inline: a full agent turn
   // can take well over a minute, and the client shouldn't have to hold a request open that long to find out
   // it worked — it learns about progress and the result purely through Realtime (chat_messages inserts,
-  // parties.agent_status updates), which is what the page subscribes to. after() keeps the function alive on
-  // Vercel until this settles, unlike a bare unawaited call, which is not safe on serverless (the process can
+  // parties.agent_status updates), which is what the page subscribes to. after() keeps the request context alive
+  // until this settles, unlike a bare unawaited call, which is not safe when the process can
   // freeze right after the response goes out). A message sent while another request already owns processing
   // returns immediately without draining (see tryAcquireAgentLock) — that owner's own drain loop re-checks
   // for unprocessed messages before releasing the lock, so this message is still picked up.
@@ -94,6 +95,14 @@ async function processPendingMessages(db: Db, partyId: string, creatorId: string
         actorId: next.sender_user_id as string,
         message: next.content as string,
       });
+      for (const preference of result.updatedPreferences as Array<{ memberId: string; wishes: unknown[] }>) {
+        const { error: preferenceError } = await db
+          .from("party_members")
+          .update({ wishes: preference.wishes })
+          .eq("party_id", partyId)
+          .eq("user_id", preference.memberId);
+        if (preferenceError) throw preferenceError;
+      }
       await syncCartFromPlan(db, partyId, result.updatedPlan as never);
       await db.from("chat_messages").update({ processed_at: new Date().toISOString() }).eq("id", next.id);
       if (result.responseText) {
@@ -102,11 +111,24 @@ async function processPendingMessages(db: Db, partyId: string, creatorId: string
     } catch (turnError) {
       // Mark processed even on failure: a permanently-failing message would otherwise wedge the queue forever.
       await db.from("chat_messages").update({ processed_at: new Date().toISOString() }).eq("id", next.id);
-      const message = turnError instanceof Error ? turnError.message : String(turnError);
+      const message = formatUnknownError(turnError);
       await db.from("parties").update({ agent_status: "ERROR", agent_error: message }).eq("id", partyId);
       return;
     }
   }
 
   await db.from("parties").update({ agent_status: "DONE" }).eq("id", partyId);
+
+  // Close the gap between the final empty read and releasing the lock. If a message arrived while the
+  // status was still THINKING, its request could not acquire the lock; after DONE is visible, either this
+  // call or that request will acquire it and drain the message.
+  const { data: racedMessages, error: racedMessagesError } = await db
+    .from("chat_messages")
+    .select("id")
+    .eq("party_id", partyId)
+    .eq("sender_type", "USER")
+    .is("processed_at", null)
+    .limit(1);
+  if (racedMessagesError) throw racedMessagesError;
+  if (racedMessages?.length) await processPendingMessages(db, partyId, creatorId);
 }

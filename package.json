@@ -2,6 +2,9 @@
   "name": "silpo_party",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -10,6 +13,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "start:free": "node scripts/start-combined.mjs",
     "lint": "eslint",
     "test": "node --test --experimental-strip-types tests/*.test.ts"
   },

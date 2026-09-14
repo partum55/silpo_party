@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const planningModeSchema = z.enum(["SHOPPING", "DINNER", "EVENT"]);
+
 export const wishSchema = z.object({
   id: z.string().min(1),
   text: z.string().min(1),
@@ -48,6 +50,8 @@ export const memberSchema = z.object({
 
 export const partyPlanningInputSchema = z.object({
   request: z.string().min(1),
+  mode: planningModeSchema.default("EVENT"),
+  budgetUah: z.number().nonnegative().nullable().default(null),
   currentParty: z.object({
     members: z.array(memberSchema).max(10),
   }),
@@ -55,7 +59,8 @@ export const partyPlanningInputSchema = z.object({
 
 export const plannerSelectionSchema = z.object({
   productId: z.string().min(1),
-  quantity: z.number().positive(),
+  // Count of catalog purchase increments/packages, never kilograms or a free-form recipe amount.
+  quantity: z.number().int().positive(),
   assignedMemberIds: z.array(z.string().min(1)).min(1),
   reason: z.string().min(1),
 });

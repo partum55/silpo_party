@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyGatheredContext, createInitialState, discoverWishCandidates, runPlanningLoop } from "../src/domain/planning.ts";
+import { applyGatheredContext, createInitialState, discoverWishCandidates, mentionedParticipantCount, runPlanningLoop } from "../src/domain/planning.ts";
 import { partyPlanningInputSchema } from "../src/domain/schemas.ts";
 import type { HydratedProduct } from "../src/domain/validation.ts";
 
@@ -157,6 +157,36 @@ test("member state overrides a conflicting prompt count", () => {
   });
 
   assert.equal(result.participantCount, 2);
+  assert.equal(result.warnings[0]?.code, "participant_count_conflict");
+});
+
+test("extracts event headcounts without treating ordinary quantities as participants", () => {
+  assert.equal(mentionedParticipantCount("Хочу шашлики на трьох та печену картоплю"), 3);
+  assert.equal(mentionedParticipantCount("Plan a barbecue for 6 people"), 6);
+  assert.equal(mentionedParticipantCount("Купи 3 пляшки води"), null);
+});
+
+test("participant-count conflicts survive proposal validation", async () => {
+  const state = applyGatheredContext(createInitialState({
+    request: "Barbecue for three",
+    currentParty: { members: [{ id: "a", restrictions: [] }] },
+  }), {
+    budgetUah: null,
+    partyWideRestrictions: [],
+    participantCountMentioned: 3,
+  });
+  const result = await runPlanningLoop(state, {
+    plan: async () => ({
+      summary: "Complete event",
+      selections: [
+        { productId: "food", quantity: 1, assignedMemberIds: ["a"], reason: "Main" },
+        { productId: "drink", quantity: 1, assignedMemberIds: ["a"], reason: "Drink" },
+      ],
+    }),
+    hydrate: async (id) => product(id, id === "drink" ? "drink" : "food"),
+  });
+
+  assert.equal(result.readiness, "ready");
   assert.equal(result.warnings[0]?.code, "participant_count_conflict");
 });
 

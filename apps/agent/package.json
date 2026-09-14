@@ -10,14 +10,14 @@
   },
   "scripts": {
     "dev": "mastra dev --env ../../.env.local",
-    "build": "mastra build",
+    "build": "mastra build && node scripts/fix-mastra-imports.mjs",
+    "start": "node .mastra/output/index.mjs",
     "test": "node --test --experimental-strip-types tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.48",
     "@mastra/core": "1.66.0",
-    "@mastra/deployer-vercel": "1.2.25",
     "@silpo-party/silpo-mcp": "*",
     "zod": "4.6.5"
   },
