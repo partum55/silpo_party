@@ -173,7 +173,7 @@ const discoverCandidates = createStep({
     if (!searchableWishes.length) return inputData;
 
     const response = await partyPlannerAgent.generate(
-      `For each wish, return up to two short Silpo catalog search query variants. Use general food/product wording and never name or invent SKUs. Return every supplied memberId and wishId unchanged.\n\n${JSON.stringify(searchableWishes)}`,
+      `Return a JSON object with, for each wish, up to two short Silpo catalog search query variants. Use general food/product wording and never name or invent SKUs. Return every supplied memberId and wishId unchanged.\n\n${JSON.stringify(searchableWishes)}`,
       { structuredOutput: { schema: wishQueryVariantsSchema }, requestContext },
     );
     const validKeys = new Set(searchableWishes.map((wish) => `${wish.memberId}:${wish.wishId}`));

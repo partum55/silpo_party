@@ -123,7 +123,7 @@ async function queryVariants(party: Input["currentParty"]) {
   if (!wishes.length) return {};
   const schema = z.object({ wishes: z.array(z.object({ memberId: z.string(), wishId: z.string(), queries: z.array(z.string()).max(2) })) });
   const response = await partyPlannerAgent.generate(
-    `Return up to two short Silpo search variants for every supplied wish. Preserve IDs exactly.\n${JSON.stringify(wishes)}`,
+    `Return a JSON object with up to two short Silpo search variants for every supplied wish. Preserve IDs exactly.\n${JSON.stringify(wishes)}`,
     { structuredOutput: { schema } },
   );
   const keys = new Set(wishes.map((wish) => `${wish.memberId}:${wish.wishId}`));
@@ -139,7 +139,7 @@ const conversationalTurn = createStep({
   outputSchema: conversationOutputSchema,
   execute: async ({ inputData, requestContext }) => {
     const decisionResponse = await partyPlannerAgent.generate(
-      `Classify one party conversation message. Questions are read_only and must have no operations. Preference messages produce incremental add/remove/replace/reset operations only for the actor; never return a complete wish list and never change participant status. Plan commands produce only add/remove/replace plan operations. Respect the supplied scope. Product and recipe targetId values must come from currentPlan.\n${JSON.stringify({ message: inputData.message, actorId: inputData.actorId, hostId: inputData.hostId, scope: inputData.scope, currentParty: inputData.currentParty, currentPlan: inputData.currentPlan })}`,
+      `Classify one party conversation message and return a JSON object matching the decision schema. Questions are read_only and must have no operations. Preference messages produce incremental add/remove/replace/reset operations only for the actor; never return a complete wish list and never change participant status. Plan commands produce only add/remove/replace plan operations. Respect the supplied scope. Product and recipe targetId values must come from currentPlan.\n${JSON.stringify({ message: inputData.message, actorId: inputData.actorId, hostId: inputData.hostId, scope: inputData.scope, currentParty: inputData.currentParty, currentPlan: inputData.currentPlan })}`,
       { structuredOutput: { schema: conversationDecisionSchema }, requestContext },
     );
     const decision = decisionResponse.object;
