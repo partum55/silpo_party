@@ -1,26 +1,89 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --paper: #f3f5ed;
+  --paper-raised: #fbfbf6;
+  --ink: #2a2420;
+  --ink-soft: #55493f;
+  --tomato: #ff5a3c;
+  --tomato-ink: #7a2210;
+  --basil: #3b8659;
+  --basil-ink: #ffffff;
+  --butter: #f4b740;
+  --butter-ink: #5c3d05;
+  --plum: #7c4b8c;
+  --plum-ink: #ffffff;
+  --stone: #c9c2b4;
+  --stone-soft: #e4dfd2;
+  --stone-600: #8c8375;
+  --danger: #cc3d2e;
+  --danger-soft: #fbe4df;
+
+  --radius-lg: 1.1rem;
+  --radius-md: 0.7rem;
+  --radius-sm: 0.5rem;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-paper: var(--paper);
+  --color-paper-raised: var(--paper-raised);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-tomato: var(--tomato);
+  --color-tomato-ink: var(--tomato-ink);
+  --color-basil: var(--basil);
+  --color-basil-ink: var(--basil-ink);
+  --color-butter: var(--butter);
+  --color-butter-ink: var(--butter-ink);
+  --color-plum: var(--plum);
+  --color-plum-ink: var(--plum-ink);
+  --color-stone: var(--stone);
+  --color-stone-soft: var(--stone-soft);
+  --color-stone-600: var(--stone-600);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: var(--font-manrope);
+  --font-numeral: var(--font-space-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  background: var(--paper);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+* {
+  border-color: var(--stone);
+}
+
+:focus-visible {
+  outline: 2px solid var(--tomato);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* One torn-paper edge, used exactly once (the receipt/plan summary panel). */
+.torn-edge {
+  --bite: 14px;
+  clip-path: polygon(
+    0% 0%, 100% 0%, 100% calc(100% - var(--bite)),
+    93% 100%, 86% calc(100% - var(--bite)), 79% 100%, 72% calc(100% - var(--bite)),
+    65% 100%, 58% calc(100% - var(--bite)), 51% 100%, 44% calc(100% - var(--bite)),
+    37% 100%, 30% calc(100% - var(--bite)), 23% 100%, 16% calc(100% - var(--bite)),
+    9% 100%, 2% calc(100% - var(--bite)), 0% 100%
+  );
+  padding-bottom: calc(1rem + var(--bite));
 }

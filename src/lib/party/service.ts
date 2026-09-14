@@ -3,6 +3,7 @@ import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 import { generateJoinCode } from "./join-code";
+import { resolveMemberIdentities } from "./identity";
 import { assertOk, checkActiveMemberAction, checkCreate, checkDelete, checkJoin, checkLeave, checkRead, MAX_ACTIVE_PARTIES_PER_USER } from "./rules";
 
 type Db = ReturnType<typeof createSupabaseAdminClient>;
@@ -101,11 +102,16 @@ export async function listMembers(partyId: string, userId: string) {
   assertOk(checkRead({ isMember: Boolean(role), partyStatus: status }));
   const { data, error } = await db
     .from("party_members")
-    .select("user_id, role, joined_at")
+    .select("user_id, role, joined_at, wishes")
     .eq("party_id", partyId)
     .order("joined_at", { ascending: true });
   if (error) throw error;
-  return data ?? [];
+  const rows = data ?? [];
+  const identities = await resolveMemberIdentities(db, rows.map((row) => row.user_id as string));
+  return rows.map((row) => ({
+    ...row,
+    ...(identities.get(row.user_id as string) ?? { name: "Учасник", avatarUrl: null }),
+  }));
 }
 
 export async function joinPartyByCode(joinCode: string, userId: string) {

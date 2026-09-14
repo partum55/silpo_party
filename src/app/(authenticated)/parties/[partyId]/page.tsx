@@ -7,6 +7,8 @@ import { getCart } from "@/lib/cart/service";
 import { listMessages } from "@/lib/chat/service";
 import { getParty, listMembers } from "@/lib/party/service";
 import { RuleViolation } from "@/lib/party/rules";
+import { errorMessage } from "@/lib/party/error-copy";
+import { InlineAlert } from "@/components/ui/inline-alert";
 
 export default async function PartyPage({
   params,
@@ -29,16 +31,15 @@ export default async function PartyPage({
     const isCreator = party.role === "CREATOR";
 
     return (
-      <main className="mx-auto max-w-2xl space-y-6 p-6">
-        <Link href="/" className="text-sm text-zinc-500 underline">
-          ← Мої вечірки
-        </Link>
-        {error && <p role="alert" className="text-red-600">{error}</p>}
-
-        <h1 className="text-2xl font-semibold">{party.name as string}</h1>
-
+      <>
+        {error && (
+          <div className="mx-auto w-full max-w-[26rem] px-4 pt-3 sm:max-w-[30rem] md:max-w-[34rem]">
+            <InlineAlert tone="error">{errorMessage(error)}</InlineAlert>
+          </div>
+        )}
         <PartyLive
           partyId={partyId}
+          partyName={party.name as string}
           currentUserId={user.id}
           isCreator={isCreator}
           initialParty={{
@@ -60,15 +61,15 @@ export default async function PartyPage({
             memberTotals: (cart.memberTotals ?? []) as never[],
           }}
         />
-      </main>
+      </>
     );
   } catch (caught) {
     if (caught instanceof RuleViolation) {
       return (
-        <main className="grid min-h-screen place-items-center p-6 text-center">
+        <main className="grid min-h-dvh place-items-center p-6 text-center">
           <div className="space-y-2">
-            <p>Немає доступу до цієї вечірки ({caught.code}).</p>
-            <Link href="/" className="underline">
+            <p className="text-ink-soft">{errorMessage(caught.code)}</p>
+            <Link href="/" className="text-sm underline underline-offset-2">
               ← Мої вечірки
             </Link>
           </div>

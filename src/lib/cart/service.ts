@@ -127,6 +127,16 @@ export async function getCart(partyId: string, userId: string) {
   const memberIds = (members ?? []).map((member) => member.user_id as string);
   const plan = cart?.plan as PlanDraft;
   const totalUah = Number(cart?.total_uah ?? 0);
+
+  // cart_items is the flattened/merged projection of plan.products (see syncCartFromPlan) and doesn't carry
+  // assignedMemberIds itself; look each item's requester(s) back up from the plan for "who asked for this".
+  const assignedByProductId = new Map<string, string[]>();
+  for (const product of plan?.products ?? []) {
+    const key = product.lookupProductId ?? product.id;
+    const existing = assignedByProductId.get(key) ?? [];
+    assignedByProductId.set(key, [...new Set([...existing, ...product.assignedMemberIds])]);
+  }
+
   return {
     ...cart,
     items: (items ?? []).map((item) => {
@@ -137,9 +147,16 @@ export async function getCart(partyId: string, userId: string) {
         weighted: raw?.weighted ?? false,
         sell_unit: raw?.unit ?? null,
         line_total_uah: raw?.lineTotalUah ?? Number(item.price_uah ?? 0) * Number(item.quantity),
+        assigned_member_ids: assignedByProductId.get(item.product_id as string) ?? [],
       };
     }),
-    recipes: plan?.recipes ?? [],
+    recipes: (plan?.recipes ?? []).map((recipe) => ({
+      ...recipe,
+      cost_uah: recipe.ingredients.reduce(
+        (sum, ingredient) => sum + ingredient.selectedProduct.priceUah * ingredient.purchaseQuantity,
+        0,
+      ),
+    })),
     memberTotals: calculateMemberTotals(
       party!.mode as CostMode,
       totalUah,

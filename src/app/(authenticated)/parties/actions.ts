@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { finalizeCart } from "@/lib/cart/service";
 import { createParty, deleteParty, joinPartyByCode, leaveParty, updatePartyBudget, type PartyMode } from "@/lib/party/service";
+import { extractJoinCode } from "@/lib/party/join-code";
 import { RuleViolation } from "@/lib/party/rules";
 
 export async function createPartyAction(formData: FormData) {
@@ -47,7 +48,7 @@ export async function updatePartyBudgetAction(formData: FormData) {
 
 export async function joinPartyAction(formData: FormData) {
   const user = await requireUser();
-  const joinCode = String(formData.get("joinCode") ?? "").trim();
+  const joinCode = extractJoinCode(String(formData.get("joinCode") ?? ""));
   if (!joinCode) redirect("/?error=join_code_required");
 
   let partyId: string;

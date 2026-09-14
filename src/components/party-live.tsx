@@ -1,74 +1,22 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { deletePartyAction, finalizeCartAction, leavePartyAction, updatePartyBudgetAction } from "@/app/(authenticated)/parties/actions";
-import { formatAmount, formatPurchase, type PackageSize } from "@/lib/cart/display";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { MODE_COPY } from "@/lib/party/mode-copy";
 
-type ChatMessage = {
-  id: string;
-  sender_type: "USER" | "AGENT" | "SYSTEM";
-  sender_user_id: string | null;
-  content: string;
-  created_at: string;
-};
+import { ChatMessages } from "@/components/party/chat-panel";
+import { MembersPanel } from "@/components/party/members-panel";
+import { PlanPanel } from "@/components/party/plan-panel";
+import type { Cart, ChatMessage, Member, PartyStatus } from "@/components/party/types";
 
-type Member = { user_id: string; role: "CREATOR" | "MEMBER"; joined_at: string };
-
-type CartItem = {
-  id: string;
-  name: string;
-  quantity: number;
-  price_uah: number | null;
-  package_size: PackageSize | null;
-  line_total_uah: number;
-};
-
-type RecipeIngredient = {
-  name: string;
-  requiredAmount: number;
-  unit: PackageSize["unit"];
-  purchaseQuantity: number;
-  purchasedAmount: number;
-  selectedProduct: { name: string; packageSize: PackageSize };
-};
-
-type Cart = {
-  status: "DRAFT" | "FINALIZED";
-  total_uah: number | null;
-  checkout_url: string | null;
-  items: CartItem[];
-  recipes: Array<{
-    title: string;
-    sourceUrl: string | null;
-    steps: string[];
-    assignedMemberIds: string[];
-    ingredients: RecipeIngredient[];
-  }>;
-  memberTotals: Array<{ memberId: string; amountUah: number }>;
-};
-
-type PartyStatus = {
-  status: "ACTIVE" | "COMPLETED";
-  agent_status: string;
-  agent_error: string | null;
-  join_code: string;
-  mode: "SHOPPING" | "DINNER" | "EVENT";
-  budget_uah: number | null;
-};
-
-const modeLabels: Record<PartyStatus["mode"], string> = {
-  SHOPPING: "Закупка товарів",
-  DINNER: "Приготування вечері",
-  EVENT: "Автономне планування події",
-};
-
-const modePlaceholders: Record<PartyStatus["mode"], string> = {
-  SHOPPING: "Наприклад: додай мені молоко і хліб",
-  DINNER: "Наприклад: хочу приготувати пасту карбонару",
-  EVENT: "Наприклад: заплануй шашлики з друзями на 6",
-};
+import { Button, SubmitButton } from "@/components/ui/button";
+import { InlineAlert } from "@/components/ui/inline-alert";
+import { ModeBadge } from "@/components/ui/mode-badge";
+import { TabBar } from "@/components/ui/tab-bar";
+import { ChatIcon, ListIcon } from "@/components/ui/icons";
 
 // Everything on this page that can change without this viewer doing anything — a message from someone else,
 // the agent's reply, its status ticking over, a member joining/leaving, the cart being rebuilt — arrives
@@ -80,6 +28,7 @@ const modePlaceholders: Record<PartyStatus["mode"], string> = {
 // itself are cheap to patch directly from the change payload.
 export function PartyLive({
   partyId,
+  partyName,
   currentUserId,
   isCreator,
   initialParty,
@@ -88,6 +37,7 @@ export function PartyLive({
   initialCart,
 }: {
   partyId: string;
+  partyName: string;
   currentUserId: string;
   isCreator: boolean;
   initialParty: PartyStatus;
@@ -101,7 +51,8 @@ export function PartyLive({
   const [cart, setCart] = useState(initialCart);
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
-  const listRef = useRef<HTMLUListElement>(null);
+  const [tab, setTab] = useState<"chat" | "plan">("chat");
+  const listRef = useRef<HTMLDivElement>(null);
   const lastAgentStatusRef = useRef(initialParty.agent_status);
 
   useEffect(() => {
@@ -206,8 +157,8 @@ export function PartyLive({
   }, [partyId]);
 
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [messages]);
+    listRef.current?.scrollIntoView({ block: "end" });
+  }, [messages, tab]);
 
   async function send(event: React.FormEvent) {
     event.preventDefault();
@@ -237,167 +188,108 @@ export function PartyLive({
   }
 
   const isActive = party.status === "ACTIVE";
+  const isThinking = party.agent_status === "THINKING" || party.agent_status === "SEARCHING" || party.agent_status === "UPDATING_CART";
+  const memberByUserId = new Map(members.map((member) => [member.user_id, member]));
 
   return (
-    <>
-      <p className="text-sm text-zinc-500">
-        Статус: {party.status} · Агент: {party.agent_status}
-        {party.agent_status === "ERROR" && party.agent_error ? ` — ${party.agent_error}` : ""}
-      </p>
-      <p className="text-sm text-zinc-600">
-        Сюжет: {modeLabels[party.mode]} · Бюджет: {party.budget_uah === null ? "не задано" : `${party.budget_uah} грн`}
-      </p>
-      {isCreator && isActive && (
-        <form action={updatePartyBudgetAction} className="flex max-w-sm gap-2">
-          <input type="hidden" name="partyId" value={partyId} />
-          <input
-            name="budgetUah"
-            type="number"
-            min="0"
-            step="0.01"
-            defaultValue={party.budget_uah ?? ""}
-            placeholder="Загальний бюджет, грн"
-            className="min-w-0 flex-1 rounded border px-3 py-2"
-          />
-          <button type="submit" className="rounded border px-3 py-2">Зберегти бюджет</button>
-        </form>
-      )}
-      {isCreator && (
-        <p className="text-sm">
-          Код приєднання: <span className="font-mono font-semibold">{party.join_code}</span>
-        </p>
-      )}
-
-      <section>
-        <h2 className="mb-1 font-medium">Учасники ({members.length}/10)</h2>
-        <ul className="text-sm text-zinc-600">
-          {members.map((member) => (
-            <li key={member.user_id}>
-              {member.user_id === currentUserId ? "Ви" : member.user_id} — {member.role}
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="space-y-2">
-        <h2 className="font-medium">Чат</h2>
-        <ul ref={listRef} className="max-h-80 space-y-1 overflow-y-auto rounded border p-3 text-sm">
-          {messages.length === 0 && <li className="text-zinc-500">Повідомлень ще немає.</li>}
-          {messages.map((message) => (
-            <li key={message.id}>
-              <span className="font-semibold">
-                {message.sender_type === "USER"
-                  ? message.sender_user_id === currentUserId
-                    ? "Ви"
-                    : "Учасник"
-                  : message.sender_type}
-                :
-              </span>{" "}
-              {message.content}
-            </li>
-          ))}
-        </ul>
-        {isActive && (
-          <form onSubmit={send} className="flex gap-2">
-            <input
-              value={content}
-              onChange={(event) => setContent(event.target.value)}
-              placeholder={modePlaceholders[party.mode]}
-              required
-              disabled={sending}
-              className="flex-1 rounded border px-3 py-2 disabled:opacity-50"
-            />
-            <button type="submit" disabled={sending} className="rounded bg-black px-4 py-2 text-white disabled:opacity-50">
-              {sending ? "Надсилання…" : "Надіслати"}
-            </button>
-          </form>
-        )}
-      </section>
-
-      <section className="space-y-2">
-        <h2 className="font-medium">Кошик ({cart.status})</h2>
-        <ul className="space-y-1 text-sm">
-          {cart.items.length === 0 && <li className="text-zinc-500">Кошик порожній.</li>}
-          {cart.items.map((item) => (
-            <li key={item.id}>
-              {item.name} — {formatPurchase(item.package_size, item.quantity)} — {item.line_total_uah.toFixed(2)} грн
-            </li>
-          ))}
-        </ul>
-        <p className="font-medium">Разом: {cart.total_uah ?? 0} грн</p>
-        {party.budget_uah !== null && (
-          <p className={(cart.total_uah ?? 0) > party.budget_uah ? "text-sm text-red-600" : "text-sm text-green-700"}>
-            {(cart.total_uah ?? 0) > party.budget_uah
-              ? `Перевищення бюджету: ${((cart.total_uah ?? 0) - party.budget_uah).toFixed(2)} грн`
-              : `Залишок бюджету: ${(party.budget_uah - (cart.total_uah ?? 0)).toFixed(2)} грн`}
+    <div className="mx-auto flex h-dvh w-full max-w-[26rem] flex-col sm:max-w-[30rem] md:max-w-[34rem]">
+      <header className="shrink-0 space-y-2.5 border-b border-stone px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)]">
+        <div className="flex items-center gap-2">
+          <Link href="/" className="text-ink-soft" aria-label="До моїх вечірок">
+            ←
+          </Link>
+          <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">{partyName}</h1>
+          <ModeBadge mode={party.mode} />
+        </div>
+        <MembersPanel members={members} currentUserId={currentUserId} />
+        {isThinking && (
+          <p className="flex items-center gap-1.5 text-xs text-ink-soft">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-plum" />
+            Агент думає…
           </p>
         )}
-        {cart.recipes.length > 0 && (
-          <div className="space-y-2 text-sm">
-            <p className="font-medium">Рецепти:</p>
-            {cart.recipes.map((recipe) => (
-              <details key={recipe.title} className="rounded border p-2">
-                <summary className="cursor-pointer font-medium">{recipe.title}</summary>
-                {recipe.sourceUrl && <a href={recipe.sourceUrl} target="_blank" rel="noopener noreferrer" className="underline">Джерело рецепта</a>}
-                <p className="mt-2 font-medium">Ingredients:</p>
-                <ul className="list-disc space-y-1 pl-5">
-                  {recipe.ingredients.map((ingredient, index) => (
-                    <li key={`${recipe.title}-ingredient-${index}`}>
-                      {ingredient.name}: need {formatAmount(ingredient.requiredAmount, ingredient.unit)}; buy {ingredient.selectedProduct.name} — {formatPurchase(ingredient.selectedProduct.packageSize, ingredient.purchaseQuantity)}
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-2 font-medium">Steps:</p>
-                <ol className="list-decimal space-y-1 pl-5">
-                  {recipe.steps.map((step, index) => <li key={`${recipe.title}-${index}`}>{step}</li>)}
-                </ol>
-              </details>
-            ))}
-          </div>
+        {party.agent_status === "ERROR" && party.agent_error && (
+          <InlineAlert tone="error">{party.agent_error}</InlineAlert>
         )}
-        <div className="text-sm text-zinc-600">
-          <p className="font-medium">До сплати:</p>
-          <ul>
-            {cart.memberTotals.map((total) => (
-              <li key={total.memberId}>
-                {total.memberId === currentUserId ? "Ви" : total.memberId}: {total.amountUah.toFixed(2)} грн
-              </li>
-            ))}
-          </ul>
-        </div>
-        {cart.checkout_url && (
-          <a href={cart.checkout_url} target="_blank" rel="noopener noreferrer" className="text-sm underline">
-            Оформити на Silpo →
-          </a>
-        )}
-      </section>
+        {!isActive && <InlineAlert tone="info">Вечірку завершено — кошик оформлено.</InlineAlert>}
+      </header>
 
-      <section className="flex flex-wrap gap-2">
-        {isCreator && isActive && (
-          <form action={finalizeCartAction}>
-            <input type="hidden" name="partyId" value={partyId} />
-            <button type="submit" className="rounded bg-green-700 px-4 py-2 text-white">
-              Фіналізувати кошик
-            </button>
-          </form>
-        )}
-        {!isCreator && isActive && (
-          <form action={leavePartyAction}>
-            <input type="hidden" name="partyId" value={partyId} />
-            <button type="submit" className="rounded border px-4 py-2">
-              Покинути вечірку
-            </button>
-          </form>
-        )}
-        {isCreator && (
-          <form action={deletePartyAction}>
-            <input type="hidden" name="partyId" value={partyId} />
-            <button type="submit" className="rounded border border-red-600 px-4 py-2 text-red-600">
-              Видалити вечірку
-            </button>
-          </form>
-        )}
-      </section>
-    </>
+      <div className="flex-1 overflow-y-auto">
+        <div hidden={tab !== "chat"}>
+          <ChatMessages messages={messages} currentUserId={currentUserId} memberNames={memberByUserId} listRef={listRef} />
+        </div>
+        <div hidden={tab !== "plan"}>
+          <PlanPanel
+            party={party}
+            cart={cart}
+            members={members}
+            currentUserId={currentUserId}
+            isCreator={isCreator}
+            budgetForm={
+              <form action={updatePartyBudgetAction} className="flex gap-2">
+                <input type="hidden" name="partyId" value={partyId} />
+                <input
+                  name="budgetUah"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  defaultValue={party.budget_uah ?? ""}
+                  placeholder="Бюджет, грн"
+                  className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-stone bg-paper px-3 py-2 text-sm"
+                />
+                <SubmitButton variant="secondary" size="sm" pendingText="…">Зберегти</SubmitButton>
+              </form>
+            }
+            actions={
+              <>
+                {isCreator && isActive && cart.items.length > 0 && (
+                  <form action={finalizeCartAction} className="flex-1">
+                    <input type="hidden" name="partyId" value={partyId} />
+                    <SubmitButton pendingText="Оформлюємо…" className="w-full">Фіналізувати кошик</SubmitButton>
+                  </form>
+                )}
+                {!isCreator && isActive && (
+                  <form action={leavePartyAction}>
+                    <input type="hidden" name="partyId" value={partyId} />
+                    <SubmitButton variant="secondary" pendingText="…">Покинути вечірку</SubmitButton>
+                  </form>
+                )}
+                {isCreator && (
+                  <form action={deletePartyAction}>
+                    <input type="hidden" name="partyId" value={partyId} />
+                    <SubmitButton variant="destructive" pendingText="…">Видалити вечірку</SubmitButton>
+                  </form>
+                )}
+              </>
+            }
+          />
+        </div>
+      </div>
+
+      {tab === "chat" && isActive && (
+        <form onSubmit={send} className="flex shrink-0 gap-2 border-t border-stone bg-paper-raised px-3 py-2.5">
+          <input
+            value={content}
+            onChange={(event) => setContent(event.target.value)}
+            placeholder={MODE_COPY[party.mode].placeholder}
+            required
+            disabled={sending}
+            className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-stone bg-paper px-3 py-2 text-[0.95rem] disabled:opacity-50"
+          />
+          <Button type="submit" disabled={sending} size="sm" className="px-4">
+            {sending ? "…" : "Надіслати"}
+          </Button>
+        </form>
+      )}
+
+      <TabBar
+        active={tab}
+        onChange={setTab}
+        tabs={[
+          { id: "chat", label: "Чат", icon: <ChatIcon className="h-5 w-5" /> },
+          { id: "plan", label: "План", icon: <ListIcon className="h-5 w-5" />, badge: cart.items.length || undefined },
+        ]}
+      />
+    </div>
   );
 }

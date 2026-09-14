@@ -1,0 +1,64 @@
+import type { RefObject } from "react";
+
+import { SparkleIcon } from "@/components/ui/icons";
+
+import type { ChatMessage, Member } from "./types";
+
+function bubbleClass(mine: boolean, senderType: ChatMessage["sender_type"]) {
+  if (mine) return "bg-tomato text-white";
+  if (senderType === "AGENT") return "bg-plum/10 text-ink border border-plum/20";
+  return "bg-paper-raised border border-stone text-ink";
+}
+
+export function ChatMessages({
+  messages,
+  currentUserId,
+  memberNames,
+  listRef,
+}: {
+  messages: ChatMessage[];
+  currentUserId: string;
+  memberNames: Map<string, Member>;
+  listRef: RefObject<HTMLDivElement | null>;
+}) {
+  if (messages.length === 0) {
+    return (
+      <p className="px-5 py-8 text-center text-sm text-ink-soft">
+        Напишіть перше повідомлення — розкажіть агенту, чого хочете.
+      </p>
+    );
+  }
+
+  return (
+    <div ref={listRef} className="space-y-2.5 px-4 py-4">
+      {messages.map((message) => {
+        if (message.sender_type === "SYSTEM") {
+          return (
+            <p key={message.id} className="text-center text-xs text-stone-600">
+              {message.content}
+            </p>
+          );
+        }
+        const mine = message.sender_type === "USER" && message.sender_user_id === currentUserId;
+        const senderName = message.sender_type === "AGENT"
+          ? "Агент"
+          : mine
+            ? "Ви"
+            : (memberNames.get(message.sender_user_id ?? "")?.name ?? "Учасник");
+        return (
+          <div key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+            <div className={`max-w-[80%] rounded-[var(--radius-md)] px-3.5 py-2 text-sm leading-snug ${bubbleClass(mine, message.sender_type)}`}>
+              {!mine && (
+                <p className="mb-0.5 flex items-center gap-1 text-xs font-medium opacity-70">
+                  {message.sender_type === "AGENT" && <SparkleIcon className="h-3 w-3" />}
+                  {senderName}
+                </p>
+              )}
+              <p className="whitespace-pre-wrap">{message.content}</p>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
