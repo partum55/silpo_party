@@ -9,6 +9,7 @@ import {
   type PartyPlanningState,
 } from "../domain/planning.ts";
 import { coverageTargets } from "../domain/validation.ts";
+import { eventPlanningGuidance } from "../domain/event-guidance.ts";
 import { getPreferencePhase } from "../domain/preferences.ts";
 import {
   blockerSchema,
@@ -224,6 +225,8 @@ Current party and request:
 ${JSON.stringify({ mode: state.mode, request: state.request, members: state.currentParty.members, participantCount: state.currentParty.members.length, budgetUah: state.budgetUah, partyWideRestrictions: state.restrictions, coverageTargets, wishCandidates: state.wishCandidates })}
 
 Mode rules: SHOPPING means direct requested products assigned only to their requester and no recipes. DINNER means requested dishes become recipes and pantry staples (salt, pepper, water, cooking oil) are omitted. EVENT means autonomously cover essentials first (main food, one side, drinks, and a suitable sauce), assign shared purchases to all participants, and add optional snacks or extras only when the remaining budget comfortably allows them. In every mode, prefer lower-priced suitable verified products, minimize package waste, and treat a supplied budget as a strong constraint.
+
+${state.mode === "EVENT" ? `Current-event grounding rules: ${eventPlanningGuidance({ message: state.request, participantCount: state.currentParty.members.length, hasCurrentPlan: false })}` : ""}
 
 Member wishes are current planning preferences. Member status is UI-owned context only; never infer or change it from message text.
 
