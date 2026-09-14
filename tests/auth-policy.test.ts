@@ -21,6 +21,12 @@ test("authenticated users must complete Silpo onboarding", () => {
   assert.equal(authDestination("/login", true, false), "/connect-silpo");
 });
 
+test("authenticated users can reach the JSON API without a Silpo connection", () => {
+  assert.equal(authDestination("/api/parties", true, false), null);
+  assert.equal(authDestination("/api/parties/abc/chat", true, false), null);
+  assert.equal(authDestination("/api/parties", false, false), "/login");
+});
+
 test("connected users skip onboarding", () => {
   assert.equal(authDestination("/", true, true), null);
   assert.equal(authDestination("/connect-silpo", true, true), "/");

@@ -1,5 +1,6 @@
 import type {
   Blocker,
+  FoundRecipe,
   PartyPlanningInput,
   PlannerProposal,
   Warning,
@@ -25,11 +26,14 @@ export type HydratedProduct = {
   available: boolean;
   weighted?: boolean;
   category: "food" | "drink";
-  packageSize: { amount: number; unit: "g" | "ml" };
+  packageSize: { amount: number; unit: "g" | "ml" | "piece" };
   metadata: ProductMetadata;
+  /** Silpo's per-listing company id, required to write this product into a real Silpo cart. */
+  companyId?: string;
 };
 
 export type VerifiedProduct = HydratedProduct & {
+  lookupProductId?: string;
   quantity: number;
   assignedMemberIds: string[];
   reason: string;
@@ -39,8 +43,40 @@ export type VerifiedProduct = HydratedProduct & {
 export type PartyPlanDraft = {
   summary: string;
   products: VerifiedProduct[];
+  recipes: VerifiedRecipe[];
   totalUah: number;
   coverage: Record<string, { foodGrams: number; drinkMilliliters: number }>;
+  wishFulfillments: WishFulfillment[];
+};
+
+export type WishFulfillment = {
+  memberId: string;
+  wishId: string;
+  requestedStrategy: "ready_made" | "recipe" | "either";
+  resolvedStrategy: "ready_made" | "recipe";
+  candidateProductIds: string[];
+  selectedProductIds: string[];
+  recipeTitle: string | null;
+  fallbackReason: "explicit_cooking" | "no_candidates" | "no_safe_candidate" | "poor_match" | null;
+};
+
+export type VerifiedRecipe = {
+  title: string;
+  source: "web" | "generated";
+  sourceUrl: string | null;
+  baseServings: number;
+  servings: number;
+  assignedMemberIds: string[];
+  ingredients: Array<{
+    name: string;
+    baseAmount: number;
+    requiredAmount: number;
+    unit: "g" | "ml" | "piece";
+    purchaseQuantity: number;
+    purchasedAmount: number;
+    selectedProduct: VerifiedProduct;
+  }>;
+  steps: string[];
 };
 
 type RestrictionResult = "safe" | "unsafe" | "unknown";
@@ -109,6 +145,8 @@ export async function validateProposal({
   partyWideRestrictions,
   proposal,
   hydrate,
+  resolveRecipe,
+  wishCandidates = [],
   targets = coverageTargets,
 }: {
   input: PartyPlanningInput;
@@ -116,6 +154,13 @@ export async function validateProposal({
   partyWideRestrictions: string[];
   proposal: PlannerProposal;
   hydrate: (productId: string) => Promise<HydratedProduct | null>;
+  resolveRecipe?: (query: string) => Promise<FoundRecipe | null>;
+  wishCandidates?: Array<{
+    memberId: string;
+    wishId: string;
+    requestedStrategy: "ready_made" | "recipe" | "either";
+    candidates: Array<{ lookupProductId: string; product: HydratedProduct }>;
+  }>;
   targets?: { foodGramsPerPerson: number; drinkMillilitersPerPerson: number };
 }) {
   const members = new Map(input.currentParty.members.map((member) => [member.id, member]));
@@ -124,6 +169,8 @@ export async function validateProposal({
   );
   const blockers: Blocker[] = [];
   const selectedProducts: VerifiedProduct[] = [];
+  const recipes: VerifiedRecipe[] = [];
+  const verifiedSelections = new Map<string, VerifiedProduct>();
 
   for (const selection of proposal.selections) {
     const product = await hydrate(selection.productId);
@@ -145,7 +192,7 @@ export async function validateProposal({
     const safeIds: string[] = [];
     for (const memberId of assignedIds) {
       const member = members.get(memberId)!;
-      const restrictions = [...new Set([...partyWideRestrictions, ...member.restrictions])];
+      const restrictions = [...new Set([...partyWideRestrictions, ...(member.restrictions ?? [])])];
       const results = restrictions.map((restriction) => restrictionSafety(product, restriction));
       if (results.includes("unsafe")) {
         blockers.push({ code: "restriction_violation", message: `${product.name} is unsafe for ${member.name ?? member.id}.`, productId: product.id, memberId });
@@ -159,20 +206,204 @@ export async function validateProposal({
     const totalAmount = product.packageSize.amount * selection.quantity;
     const amountPerMember = totalAmount / assignedIds.length;
     for (const memberId of safeIds) {
-      if (product.category === "food") {
+      if (product.category === "food" && product.packageSize.unit === "g") {
         coverage[memberId].foodGrams += amountPerMember;
-      } else {
+      } else if (product.category === "drink" && product.packageSize.unit === "ml") {
         coverage[memberId].drinkMilliliters += amountPerMember;
       }
     }
 
-    selectedProducts.push({
+    const verified = {
       ...product,
+      lookupProductId: selection.productId,
       quantity: selection.quantity,
       assignedMemberIds: assignedIds,
       reason: `Assigned to ${assignedIds.length} participant${assignedIds.length === 1 ? "" : "s"}.`,
       lineTotalUah: Math.round(product.priceUah * selection.quantity * 100) / 100,
+    };
+    selectedProducts.push(verified);
+    verifiedSelections.set(selection.productId, verified);
+  }
+
+  for (const proposedRecipe of proposal.recipes ?? []) {
+    let recipe = proposedRecipe;
+    if (proposedRecipe.source === "web") {
+      const sourced = await resolveRecipe?.(proposedRecipe.title);
+      if (!sourced) {
+        blockers.push({ code: "recipe_unresolved", message: `${proposedRecipe.title} could not be resolved from a real recipe source.` });
+        continue;
+      }
+      const productIds = new Map(proposedRecipe.ingredients.map((ingredient) => [ingredient.name.trim().toLocaleLowerCase(), ingredient.productId]));
+      if (sourced.ingredients.some((ingredient) => !productIds.has(ingredient.name.trim().toLocaleLowerCase()))) {
+        blockers.push({ code: "recipe_ingredient_mapping_missing", message: `${sourced.title} does not map every sourced ingredient to a Silpo product.` });
+        continue;
+      }
+      recipe = {
+        ...sourced,
+        assignedMemberIds: proposedRecipe.assignedMemberIds,
+        ingredients: sourced.ingredients.map((ingredient) => ({
+          ...ingredient,
+          productId: productIds.get(ingredient.name.trim().toLocaleLowerCase())!,
+        })),
+      };
+    }
+
+    const assignedIds = [...new Set(recipe.assignedMemberIds)];
+    const unknownIds = assignedIds.filter((id) => !members.has(id));
+    if (unknownIds.length) {
+      blockers.push({ code: "invalid_assignment", message: `${recipe.title} is assigned to unknown party members.` });
+      continue;
+    }
+    let fullyResolved = true;
+    const safeIds = new Set(assignedIds);
+    const ingredients: VerifiedRecipe["ingredients"] = [];
+    const scale = assignedIds.length / recipe.servings;
+
+    for (const ingredient of recipe.ingredients) {
+      const product = await hydrate(ingredient.productId);
+      if (!product) {
+        blockers.push({ code: "product_not_found", message: `Silpo product ${ingredient.productId} for ${ingredient.name} was not found.`, productId: ingredient.productId });
+        fullyResolved = false;
+        continue;
+      }
+      if (!product.available) {
+        blockers.push({ code: "product_unavailable", message: `${product.name} for ${ingredient.name} is unavailable.`, productId: product.id });
+        fullyResolved = false;
+        continue;
+      }
+      if (product.packageSize.unit !== ingredient.unit) {
+        blockers.push({ code: "recipe_unit_mismatch", message: `${ingredient.name} requires ${ingredient.unit}, but ${product.name} is sold in ${product.packageSize.unit}.`, productId: product.id });
+        fullyResolved = false;
+        continue;
+      }
+
+      const evidenceProduct: HydratedProduct = {
+        ...product,
+        metadata: {
+          ...product.metadata,
+          composition: [...(product.metadata.composition ?? []), ingredient.name],
+        },
+      };
+      for (const memberId of assignedIds) {
+        const member = members.get(memberId)!;
+        const restrictions = [...new Set([...partyWideRestrictions, ...(member.restrictions ?? [])])];
+        const results = restrictions.map((restriction) => restrictionSafety(evidenceProduct, restriction));
+        if (results.includes("unsafe")) {
+          blockers.push({ code: "restriction_violation", message: `${recipe.title} ingredient ${ingredient.name} is unsafe for ${member.name ?? member.id}.`, productId: product.id, memberId });
+          safeIds.delete(memberId);
+        } else if (results.includes("unknown")) {
+          blockers.push({ code: "restriction_unverified", message: `${recipe.title} ingredient ${ingredient.name} cannot be verified for ${member.name ?? member.id}.`, productId: product.id, memberId });
+          safeIds.delete(memberId);
+        }
+      }
+
+      const requiredAmount = Math.round(ingredient.amount * scale * 1000) / 1000;
+      const purchaseQuantity = Math.ceil(requiredAmount / product.packageSize.amount);
+      const selectedProduct: VerifiedProduct = {
+        ...product,
+        lookupProductId: ingredient.productId,
+        quantity: purchaseQuantity,
+        assignedMemberIds: assignedIds,
+        reason: `Ingredient for ${recipe.title}.`,
+        lineTotalUah: Math.round(product.priceUah * purchaseQuantity * 100) / 100,
+      };
+      selectedProducts.push(selectedProduct);
+      ingredients.push({
+        name: ingredient.name,
+        baseAmount: ingredient.amount,
+        requiredAmount,
+        unit: ingredient.unit,
+        purchaseQuantity,
+        purchasedAmount: product.packageSize.amount * purchaseQuantity,
+        selectedProduct,
+      });
+    }
+
+    if (fullyResolved) {
+      const foodPerAssignedMember = recipe.ingredients
+        .filter((ingredient) => ingredient.unit === "g")
+        .reduce((sum, ingredient) => sum + ingredient.amount * scale, 0) / assignedIds.length;
+      for (const memberId of safeIds) coverage[memberId].foodGrams += foodPerAssignedMember;
+    }
+    recipes.push({
+      title: recipe.title,
+      source: recipe.source,
+      sourceUrl: recipe.sourceUrl,
+      baseServings: recipe.servings,
+      servings: assignedIds.length,
+      assignedMemberIds: [...safeIds],
+      ingredients,
+      steps: recipe.steps,
     });
+  }
+
+  const candidateSets = new Map(wishCandidates.map((set) => [`${set.memberId}:${set.wishId}`, set]));
+  const proposedFulfillments = new Map((proposal.wishFulfillments ?? []).map((item) => [`${item.memberId}:${item.wishId}`, item]));
+  const knownWishKeys = new Set(input.currentParty.members.flatMap((member) => (member.wishes ?? []).map((wish) => `${member.id}:${wish.id}`)));
+  if (proposedFulfillments.size !== (proposal.wishFulfillments ?? []).length
+    || [...proposedFulfillments.keys()].some((key) => !knownWishKeys.has(key))) {
+    blockers.push({ code: "invalid_fulfillment", message: "Wish fulfillment references must be unique and belong to current party wishes." });
+  }
+  const wishFulfillments: WishFulfillment[] = [];
+  for (const member of input.currentParty.members) {
+    for (const wish of member.wishes ?? []) {
+      const key = `${member.id}:${wish.id}`;
+      const requestedStrategy = wish.fulfillmentStrategy ?? "either";
+      const candidates = candidateSets.get(key)?.candidates ?? [];
+      const proposed = proposedFulfillments.get(key);
+      const restrictions = [...new Set([...partyWideRestrictions, ...(member.restrictions ?? [])])];
+      const safeCandidates = candidates.filter(({ product }) => product.available
+        && restrictions.every((restriction) => restrictionSafety(product, restriction) === "safe"));
+
+      if (requestedStrategy === "ready_made" && !safeCandidates.length) {
+        blockers.push({ code: "no_suitable_ready_made", message: `No suitable ready-made Silpo product was found for ${wish.text}.`, memberId: member.id });
+        continue;
+      }
+
+      if (!proposed) {
+        blockers.push({ code: "wish_unfulfilled", message: `${wish.text} is not fulfilled for ${member.name ?? member.id}.`, memberId: member.id });
+        continue;
+      }
+
+      const selectedProductIds = proposed.selectedProductIds ?? [];
+      const recipeTitle = proposed.recipeTitle ?? null;
+      const fallbackReason = proposed.fallbackReason ?? null;
+
+      if (proposed.memberId !== member.id || proposed.wishId !== wish.id || proposed.resolvedStrategy === "recipe" && requestedStrategy === "ready_made") {
+        blockers.push({ code: "invalid_fulfillment", message: `${wish.text} uses an invalid fulfillment strategy.`, memberId: member.id });
+        continue;
+      }
+
+      if (proposed.resolvedStrategy === "ready_made") {
+        const candidateIds = new Set(candidates.map((candidate) => candidate.lookupProductId));
+        const valid = selectedProductIds.length > 0 && selectedProductIds.every((id) => {
+          const selection = verifiedSelections.get(id);
+          return candidateIds.has(id) && selection?.assignedMemberIds.includes(member.id);
+        });
+        if (!valid) blockers.push({ code: "invalid_fulfillment", message: `${wish.text} must use hydrated candidates assigned to ${member.name ?? member.id}.`, memberId: member.id });
+      } else {
+        const matchingRecipe = recipes.find((recipe) => recipe.title === recipeTitle && recipe.assignedMemberIds.includes(member.id));
+        const fallbackIsValid = requestedStrategy === "recipe"
+          ? fallbackReason === "explicit_cooking"
+          : fallbackReason === "poor_match"
+            || fallbackReason === "no_candidates" && candidates.length === 0
+            || fallbackReason === "no_safe_candidate" && candidates.length > 0 && safeCandidates.length === 0;
+        if (!matchingRecipe || selectedProductIds.length || !fallbackIsValid) {
+          blockers.push({ code: "invalid_fulfillment", message: `${wish.text} has an invalid recipe fallback.`, memberId: member.id });
+        }
+      }
+
+      wishFulfillments.push({
+        memberId: member.id,
+        wishId: wish.id,
+        requestedStrategy,
+        resolvedStrategy: proposed.resolvedStrategy,
+        candidateProductIds: candidates.map((candidate) => candidate.product.id),
+        selectedProductIds: selectedProductIds.flatMap((id) => verifiedSelections.get(id)?.id ?? []),
+        recipeTitle,
+        fallbackReason,
+      });
+    }
   }
 
   for (const member of input.currentParty.members) {
@@ -184,7 +415,7 @@ export async function validateProposal({
     }
   }
 
-  if (!proposal.selections.length) {
+  if (!proposal.selections.length && !(proposal.recipes?.length)) {
     blockers.push({ code: "no_suitable_products", message: "Silpo search returned no suitable products." });
   }
 
@@ -198,8 +429,10 @@ export async function validateProposal({
   const draft: PartyPlanDraft = {
     summary: `Party plan for ${input.currentParty.members.length} participants with ${selectedProducts.length} verified Silpo products.`,
     products: selectedProducts,
+    recipes,
     totalUah,
     coverage,
+    wishFulfillments,
   };
   return { readiness, blockers, warnings, selectedProducts, coverage, totalUah, draft };
 }

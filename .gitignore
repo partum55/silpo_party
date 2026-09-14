@@ -35,7 +35,7 @@ yarn-error.log*
 !.env.example
 
 # vercel
-/.vercel/
+**/.vercel/
 
 # supabase cli
 /supabase/.branches/

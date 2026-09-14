@@ -14,7 +14,9 @@
     "test": "node --test --experimental-strip-types tests/*.test.ts"
   },
   "dependencies": {
+    "@mastra/core": "1.66.0",
     "@modelcontextprotocol/sdk": "1.30.0",
+    "@silpo-party/agent": "*",
     "@silpo-party/silpo-mcp": "*",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.116.0",

@@ -18,6 +18,16 @@ test("workflow starts from its public input without duplicate initial state", as
   assert.equal(result.status, "success");
   if (result.status === "success") {
     assert.equal(result.result.readiness, "needs_input");
+    assert.equal(result.result.preferencePhase, "provisional");
     assert.equal(result.result.questions[0]?.code, "party_members_required");
   }
+});
+
+test("conversational workflow is registered for Studio", () => {
+  assert.ok(mastra.getWorkflow("conversationalPartyWorkflow"));
+});
+
+test("read-only Silpo alternative tools are registered for Studio", () => {
+  assert.ok(mastra.getTool("silpoGetSimilarProducts"));
+  assert.ok(mastra.getTool("silpoGetReplacements"));
 });

@@ -4,12 +4,12 @@ import { z } from "zod";
 import {
   applyGatheredContext,
   createInitialState,
+  discoverWishCandidates,
   runPlanningLoop,
   type PartyPlanningState,
 } from "../domain/planning.ts";
-import {
-  coverageTargets,
-} from "../domain/validation.ts";
+import { coverageTargets } from "../domain/validation.ts";
+import { getPreferencePhase } from "../domain/preferences.ts";
 import {
   blockerSchema,
   memberSchema,
@@ -20,16 +20,20 @@ import {
 } from "../domain/schemas.ts";
 import { createSilpoGateway } from "../silpo/gateway.ts";
 import { partyPlannerAgent } from "./party-planner-agent.ts";
+import { silpoUserId } from "./tools/silpo-tools.ts";
+import { findRecipe } from "./tools/recipe-tool.ts";
 
-const productSchema = z.object({
+export const productSchema = z.object({
   id: z.string(),
+  lookupProductId: z.string().optional(),
+  companyId: z.string().optional(),
   name: z.string(),
   priceUah: z.number(),
   unit: z.string(),
   available: z.boolean(),
   weighted: z.boolean().optional(),
   category: z.enum(["food", "drink"]),
-  packageSize: z.object({ amount: z.number(), unit: z.enum(["g", "ml"]) }),
+  packageSize: z.object({ amount: z.number(), unit: z.enum(["g", "ml", "piece"]) }),
   metadata: z.object({
     ingredients: z.array(z.string()),
     allergens: z.array(z.string()),
@@ -47,11 +51,56 @@ const coverageSchema = z.record(z.string(), z.object({
   drinkMilliliters: z.number(),
 }));
 
-const planSchema = z.object({
+const recipeSchema = z.object({
+  title: z.string(),
+  source: z.enum(["web", "generated"]),
+  sourceUrl: z.string().nullable(),
+  baseServings: z.number().positive(),
+  servings: z.number().int().positive(),
+  assignedMemberIds: z.array(z.string()),
+  ingredients: z.array(z.object({
+    name: z.string(),
+    baseAmount: z.number().positive(),
+    requiredAmount: z.number().positive(),
+    unit: z.enum(["g", "ml", "piece"]),
+    purchaseQuantity: z.number().int().positive(),
+    purchasedAmount: z.number().positive(),
+    selectedProduct: productSchema,
+  })),
+  steps: z.array(z.string()),
+});
+
+const wishFulfillmentSchema = z.object({
+  memberId: z.string(),
+  wishId: z.string(),
+  requestedStrategy: z.enum(["ready_made", "recipe", "either"]),
+  resolvedStrategy: z.enum(["ready_made", "recipe"]),
+  candidateProductIds: z.array(z.string()),
+  selectedProductIds: z.array(z.string()),
+  recipeTitle: z.string().nullable(),
+  fallbackReason: z.enum(["explicit_cooking", "no_candidates", "no_safe_candidate", "poor_match"]).nullable(),
+});
+
+export const planSchema = z.object({
   summary: z.string(),
   products: z.array(productSchema),
+  recipes: z.array(recipeSchema),
   totalUah: z.number(),
   coverage: coverageSchema,
+  wishFulfillments: z.array(wishFulfillmentSchema),
+});
+
+const wishCandidateSetSchema = z.object({
+  memberId: z.string(),
+  wishId: z.string(),
+  requestedStrategy: z.enum(["ready_made", "recipe", "either"]),
+  searchQueries: z.array(z.string()),
+  candidates: z.array(z.object({ lookupProductId: z.string(), product: productSchema.omit({
+    quantity: true,
+    assignedMemberIds: true,
+    reason: true,
+    lineTotalUah: true,
+  }) })),
 });
 
 const stateSchema = z.object({
@@ -61,11 +110,13 @@ const stateSchema = z.object({
   budgetUah: z.number().nonnegative().nullable(),
   restrictions: z.array(z.string()),
   currentPlan: planSchema.nullable(),
+  wishCandidates: z.array(wishCandidateSetSchema),
   selectedProducts: z.array(productSchema),
   blockers: z.array(blockerSchema),
   warnings: z.array(warningSchema),
   questions: z.array(questionSchema),
   readiness: z.enum(["needs_input", "invalid", "ready"]),
+  preferencePhase: z.enum(["provisional", "finalized"]),
   repairAttempts: z.number().int().min(0).max(2),
   publishedPlan: planSchema.nullable(),
 });
@@ -74,6 +125,14 @@ const gatheredContextSchema = z.object({
   budgetUah: z.number().nonnegative().nullable(),
   partyWideRestrictions: z.array(z.string()),
   participantCountMentioned: z.number().int().positive().nullable(),
+});
+
+const wishQueryVariantsSchema = z.object({
+  wishes: z.array(z.object({
+    memberId: z.string(),
+    wishId: z.string(),
+    queries: z.array(z.string().min(1)).max(2),
+  })),
 });
 
 export function parsePlannerProposal(value: string) {
@@ -89,16 +148,48 @@ const gatherContext = createStep({
   description: "Extracts soft budget and party-wide restrictions; current members remain authoritative.",
   inputSchema: partyPlanningInputSchema,
   outputSchema: stateSchema,
-  execute: async ({ inputData }) => {
+  execute: async ({ inputData, requestContext }) => {
     let next = createInitialState(inputData);
     if (next.participantCount) {
       const response = await partyPlannerAgent.generate(
         `Return JSON with exactly these keys: {"budgetUah": number|null, "partyWideRestrictions": string[], "participantCountMentioned": number|null}. Do not plan products or add other keys.\n\nParty request:\n${inputData.request}`,
-        { structuredOutput: { schema: gatheredContextSchema } },
+        { structuredOutput: { schema: gatheredContextSchema }, requestContext },
       );
       next = applyGatheredContext(next, response.object);
     }
     return next;
+  },
+});
+
+const discoverCandidates = createStep({
+  id: "discover-wish-candidates",
+  description: "Searches and hydrates a bounded Silpo candidate set for each non-recipe wish.",
+  inputSchema: stateSchema,
+  outputSchema: stateSchema,
+  execute: async ({ inputData, requestContext }) => {
+    const searchableWishes = inputData.currentParty.members.flatMap((member) => member.wishes
+      .filter((wish) => wish.fulfillmentStrategy !== "recipe")
+      .map((wish) => ({ memberId: member.id, wishId: wish.id, text: wish.text })));
+    if (!searchableWishes.length) return inputData;
+
+    const response = await partyPlannerAgent.generate(
+      `For each wish, return up to two short Silpo catalog search query variants. Use general food/product wording and never name or invent SKUs. Return every supplied memberId and wishId unchanged.\n\n${JSON.stringify(searchableWishes)}`,
+      { structuredOutput: { schema: wishQueryVariantsSchema }, requestContext },
+    );
+    const validKeys = new Set(searchableWishes.map((wish) => `${wish.memberId}:${wish.wishId}`));
+    const queryVariants = Object.fromEntries(response.object.wishes
+      .filter((wish) => validKeys.has(`${wish.memberId}:${wish.wishId}`))
+      .map((wish) => [`${wish.memberId}:${wish.wishId}`, wish.queries]));
+    const silpo = createSilpoGateway(silpoUserId(requestContext));
+    return {
+      ...inputData,
+      wishCandidates: await discoverWishCandidates({
+        party: inputData.currentParty,
+        queryVariants,
+        search: silpo.searchProductIds,
+        hydrate: silpo.hydrate,
+      }),
+    };
   },
 });
 
@@ -107,27 +198,30 @@ const planAndValidate = createStep({
   description: "Plans with live Silpo tools, validates deterministically, and repairs at most twice.",
   inputSchema: stateSchema,
   outputSchema: stateSchema,
-  execute: async ({ inputData }) => {
-    const userId = process.env.SILPO_USER_ID;
-    if (!userId && inputData.participantCount) throw new Error("Missing environment variable: SILPO_USER_ID");
-    const silpo = userId ? createSilpoGateway(userId) : null;
+  execute: async ({ inputData, requestContext }) => {
+    const silpo = inputData.participantCount ? createSilpoGateway(silpoUserId(requestContext)) : null;
     const result = await runPlanningLoop(inputData as PartyPlanningState, {
       plan: async ({ state, previousBlockers }) => {
         const response = await partyPlannerAgent.generate(
-          `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "quantity": number, "assignedMemberIds": string[], "reason": string}]}. Do not rename selections or assignedMemberIds, and do not add other keys. Search products and inspect details before choosing IDs. Keep the plan small, normally 4-8 selections; increase quantities instead of adding near-duplicates.
+          `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "quantity": number, "assignedMemberIds": string[], "reason": string}], "recipes": [{"title": string, "source": "web"|"generated", "sourceUrl": string|null, "servings": number, "assignedMemberIds": string[], "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece", "productId": string}], "steps": string[]}], "wishFulfillments": [{"memberId": string, "wishId": string, "resolvedStrategy": "ready_made"|"recipe", "selectedProductIds": string[], "recipeTitle": string|null, "fallbackReason": "explicit_cooking"|"no_candidates"|"no_safe_candidate"|"poor_match"|null}]}. Always include all three arrays. Do not rename fields or add other keys. Candidate lookupProductIds are the only IDs allowed for ready-made wish fulfillment. Rank the full hydrated candidate set rather than automatically choosing its first item. A wish may use several candidates for variety. Consider participant preferences, participant-specific restrictions, price, quantity, variety, and closeness to the wish.
 
 Current party and request:
-${JSON.stringify({ request: state.request, members: state.currentParty.members, participantCount: state.currentParty.members.length, budgetUah: state.budgetUah, partyWideRestrictions: state.restrictions, coverageTargets })}
+${JSON.stringify({ request: state.request, members: state.currentParty.members, participantCount: state.currentParty.members.length, budgetUah: state.budgetUah, partyWideRestrictions: state.restrictions, coverageTargets, wishCandidates: state.wishCandidates })}
+
+Member wishes are current planning preferences. Member status is UI-owned context only; never infer or change it from message text.
+
+For ready_made, choose suitable candidate products or leave the wish blocked. For either, prefer suitable ready-made candidates; use a recipe only for no_candidates, no_safe_candidate, or a genuine poor_match. For recipe, skip ready-made fulfillment and use explicit_cooking. Recipe resolution is a fallback strategy, not the default for named dishes. These rules apply generally; never special-case a dish.
 
 Coverage uses hydrated package amount × quantity, divided among every assigned member. Meet both targets for each member; on repair, replace unverified products and increase quantities where coverage is short.
 
 Deterministic validation failures from the previous attempt:
 ${JSON.stringify(previousBlockers)}`,
-          { maxSteps: 20 },
+          { maxSteps: 20, requestContext },
         );
         return parsePlannerProposal(response.text);
       },
       hydrate: (productId) => silpo!.hydrate(productId),
+      resolveRecipe: findRecipe,
     });
     return result;
   },
@@ -135,14 +229,18 @@ ${JSON.stringify(previousBlockers)}`,
 
 const finalize = createStep({
   id: "finalize",
-  description: "Publishes a draft only when deterministic validation marked it ready.",
+  description: "Publishes a validated draft only after every member explicitly finalized preferences.",
   inputSchema: stateSchema,
   outputSchema: stateSchema,
   execute: async ({ inputData }) => {
+    const preferencePhase = getPreferencePhase(inputData.currentParty);
     const result = {
       ...inputData,
       participantCount: inputData.currentParty.members.length,
-      publishedPlan: inputData.readiness === "ready" ? inputData.currentPlan : null,
+      preferencePhase,
+      publishedPlan: inputData.readiness === "ready" && preferencePhase === "finalized"
+        ? inputData.currentPlan
+        : null,
     };
     return result;
   },
@@ -155,6 +253,7 @@ export const partyPlanningWorkflow = createWorkflow({
   outputSchema: stateSchema,
 })
   .then(gatherContext)
+  .then(discoverCandidates)
   .then(planAndValidate)
   .then(finalize)
   .commit();

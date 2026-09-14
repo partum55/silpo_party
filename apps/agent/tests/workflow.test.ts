@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyGatheredContext, createInitialState, runPlanningLoop } from "../src/domain/planning.ts";
+import { applyGatheredContext, createInitialState, discoverWishCandidates, runPlanningLoop } from "../src/domain/planning.ts";
 import { partyPlanningInputSchema } from "../src/domain/schemas.ts";
 import type { HydratedProduct } from "../src/domain/validation.ts";
 
@@ -33,7 +33,7 @@ test("repairs a fabricated id and publishes only hydrated products", async () =>
   let calls = 0;
   const state = createInitialState({
     request: "Party",
-    currentParty: { members: [{ id: "a", restrictions: [] }] },
+    currentParty: { members: [{ id: "a", restrictions: [], status: "ready" }] },
   });
   const result = await runPlanningLoop(state, {
     plan: async () => {
@@ -55,6 +55,74 @@ test("repairs a fabricated id and publishes only hydrated products", async () =>
   assert.equal(result.repairAttempts, 1);
   assert.equal(result.readiness, "ready");
   assert.equal(result.publishedPlan?.products.some((item) => item.id === "fake-123"), false);
+});
+
+test("a validated plan stays provisional while a participant is collecting", async () => {
+  const state = createInitialState({
+    request: "Party",
+    currentParty: { members: [{ id: "a", restrictions: [], wishes: [{ id: "pizza", text: "pizza" }] }] },
+  });
+  state.wishCandidates = [{
+    memberId: "a",
+    wishId: "pizza",
+    requestedStrategy: "either",
+    searchQueries: ["pizza"],
+    candidates: [{ lookupProductId: "food", product: product("food", "food") }],
+  }];
+  const result = await runPlanningLoop(state, {
+    plan: async () => ({
+      summary: "Draft",
+      selections: [
+        { productId: "food", quantity: 1, assignedMemberIds: ["a"], reason: "Food" },
+        { productId: "drink", quantity: 1, assignedMemberIds: ["a"], reason: "Drink" },
+      ],
+      wishFulfillments: [{
+        memberId: "a",
+        wishId: "pizza",
+        resolvedStrategy: "ready_made",
+        selectedProductIds: ["food"],
+        recipeTitle: null,
+        fallbackReason: null,
+      }],
+    }),
+    hydrate: async (id) => id === "food" || id === "drink" ? product(id, id) : null,
+  });
+
+  assert.equal(result.readiness, "ready");
+  assert.equal(result.preferencePhase, "provisional");
+  assert.ok(result.currentPlan);
+  assert.equal(result.publishedPlan, null);
+});
+
+test("candidate discovery searches incrementally, hydrates a bounded set, and skips recipe wishes", async () => {
+  const party = partyPlanningInputSchema.parse({
+    request: "Party",
+    currentParty: { members: [{
+      id: "a",
+      wishes: [
+        { id: "hot", text: "щось гаряче" },
+        { id: "salad", text: "готуємо салат", fulfillmentStrategy: "recipe" },
+      ],
+    }] },
+  }).currentParty;
+  const searched: string[] = [];
+  const result = await discoverWishCandidates({
+    party,
+    queryVariants: { "a:hot": ["гарячі страви", "кулінарія", "ignored"] },
+    search: async (query) => {
+      searched.push(query);
+      return Array.from({ length: 10 }, (_, index) => `${query}-${index}`);
+    },
+    hydrate: async (id) => product(id, "food"),
+  });
+
+  assert.deepEqual(searched, ["щось гаряче", "гарячі страви", "кулінарія"]);
+  assert.equal(result[0]?.candidates.length, 6);
+  assert.deepEqual(result[0]?.candidates.slice(0, 3).map((candidate) => candidate.lookupProductId), [
+    "щось гаряче-0", "гарячі страви-0", "кулінарія-0",
+  ]);
+  assert.deepEqual(result[1]?.candidates, []);
+  assert.deepEqual(result[1]?.searchQueries, []);
 });
 
 test("never attempts a third repair", async () => {

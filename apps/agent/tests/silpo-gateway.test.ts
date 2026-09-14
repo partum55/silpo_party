@@ -1,7 +1,72 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeSilpoProduct, serializeSilpoOperation } from "../src/silpo/gateway.ts";
+import {
+  extractSearchProductIds,
+  hasTimeslot,
+  listSilpoToolSchemas,
+  normalizeSilpoProduct,
+  serializeSilpoOperation,
+  toolArguments,
+} from "../src/silpo/gateway.ts";
+
+const requiredTools = [
+  "silpo_get_my_shopping_cart",
+  "silpo_get_shopping_cart_by_id",
+  "silpo_get_time_slots",
+  "silpo_find_products_batch",
+  "silpo_get_product_details",
+  "silpo_get_similar_products",
+  "silpo_get_replacements",
+];
+
+test("extracts unique external product ids from Silpo search candidates", () => {
+  assert.deepEqual(extractSearchProductIds({ groups: [{ items: [
+    { id: "internal-a", externalProductId: 101 },
+    { id: "internal-b", externalProductId: "202" },
+    { id: "duplicate", externalProductId: 101 },
+  ] }] }), ["101", "202"]);
+});
+
+test("discovers paginated MCP tools and keeps their live input schemas", async () => {
+  const cursors: Array<string | undefined> = [];
+  const client = { listTools: async (params?: { cursor?: string }) => {
+    cursors.push(params?.cursor);
+    const names = params?.cursor ? requiredTools.slice(3) : requiredTools.slice(0, 3);
+    return {
+      tools: names.map((name) => ({ name, inputSchema: { type: "object" as const, properties: { branchId: {} } } })),
+      nextCursor: params?.cursor ? undefined : "next-page",
+    };
+  } } as unknown as Parameters<typeof listSilpoToolSchemas>[0];
+
+  const schemas = await listSilpoToolSchemas(client);
+  assert.deepEqual(cursors, [undefined, "next-page"]);
+  assert.ok(schemas.has("silpo_get_replacements"));
+});
+
+test("fails discovery when a required MCP tool is unavailable", async () => {
+  const client = { listTools: async () => ({
+    tools: requiredTools.slice(0, -1).map((name) => ({ name, inputSchema: { type: "object" as const } })),
+  }) } as unknown as Parameters<typeof listSilpoToolSchemas>[0];
+  await assert.rejects(listSilpoToolSchemas(client), /silpo_get_replacements/);
+});
+
+test("builds MCP arguments only from the discovered schema", () => {
+  assert.deepEqual(toolArguments({
+    properties: { branchId: {}, slug: {} },
+    required: ["branchId", "slug"],
+  }, [{ branchId: "branch", ignored: true }, { slug: "product-slug" }]), {
+    branchId: "branch",
+    slug: "product-slug",
+  });
+  assert.throws(() => toolArguments({ properties: { slug: {} }, required: ["slug"] }, [{}]), /slug/);
+});
+
+test("validates the active cart timeslot against the live slot response", () => {
+  assert.equal(hasTimeslot({ days: [{ slots: [{ start: "2026-09-14T10:00", end: "2026-09-14T12:00" }] }] },
+    "2026-09-14T10:00", "2026-09-14T12:00"), true);
+  assert.equal(hasTimeslot({ slots: [] }, "2026-09-14T10:00", "2026-09-14T12:00"), false);
+});
 
 test("serializes Silpo operations per user to protect OAuth refresh tokens", async () => {
   let active = 0;
@@ -75,4 +140,20 @@ test("uses kilograms as the sell unit for weighted products", () => {
   assert.equal(result?.weighted, true);
   assert.equal(result?.unit, "кг");
   assert.deepEqual(result?.packageSize, { amount: 100, unit: "g" });
+});
+
+test("normalizes piece-count recipe products", () => {
+  const result = normalizeSilpoProduct({ product: {
+    id: "eggs",
+    name: "Яйця курячі 10шт",
+    price: 70,
+    available: true,
+    ratio: "шт",
+    weighted: false,
+    displayRatio: "10шт",
+    attributes: {},
+  } }, "eggs");
+
+  assert.equal(result?.category, "food");
+  assert.deepEqual(result?.packageSize, { amount: 10, unit: "piece" });
 });
