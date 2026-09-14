@@ -68,7 +68,10 @@ export async function listMyParties(userId: string) {
     .eq("user_id", userId)
     .order("joined_at", { ascending: false });
   if (error) throw error;
-  return (data ?? []).map((row) => ({ ...row.parties, role: row.role, joinedAt: row.joined_at }));
+  return (data ?? []).map((row) => {
+    const party = row.parties as unknown as Record<string, unknown>;
+    return { ...party, role: row.role, joinedAt: row.joined_at };
+  });
 }
 
 export async function getParty(partyId: string, userId: string) {
