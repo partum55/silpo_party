@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": "./src/mastra/index.ts",
+  "exports": {
+    ".": "./src/mastra/index.ts",
+    "./gateway": "./src/gateway-entry.ts",
+    "./conversational-workflow": "./src/mastra/conversational-workflow.ts"
+  },
   "scripts": {
     "dev": "mastra dev --env ../../.env.local",
     "build": "mastra build",

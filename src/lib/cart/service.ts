@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createSilpoGateway, extractCheckoutUrl, type CartLineItem } from "@silpo-party/agent";
+import { createSilpoGateway, extractCheckoutUrl, type CartLineItem } from "@silpo-party/agent/gateway";
 
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { assertOk, checkFinalize, checkRead } from "@/lib/party/rules";

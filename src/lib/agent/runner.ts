@@ -1,7 +1,7 @@
 import "server-only";
 
 import { RequestContext } from "@mastra/core/request-context";
-import { mastra } from "@silpo-party/agent";
+import { conversationalPartyWorkflow } from "@silpo-party/agent/conversational-workflow";
 
 import type { Db } from "@/lib/party/access";
 
@@ -51,7 +51,7 @@ export async function runConversationalTurn(db: Db, {
   const requestContext = new RequestContext();
   requestContext.set("silpoUserId", creatorId);
 
-  const run = await mastra.getWorkflow("conversationalPartyWorkflow").createRun();
+  const run = await conversationalPartyWorkflow.createRun();
   const result = await run.start({
     inputData: {
       message,
