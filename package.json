@@ -13,7 +13,6 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "start:free": "node scripts/start-combined.mjs",
     "lint": "eslint",
     "test": "node --test --experimental-strip-types tests/*.test.ts"
   },

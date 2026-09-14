@@ -23,10 +23,14 @@ export const mastra = new Mastra({
   // default serverless timeout, which would kill the function mid-run and leave the party's agent_status
   // stuck at THINKING forever (the compare-and-swap lock in chat/service.ts only releases from
   // IDLE/DONE/ERROR). The standalone service avoids a serverless invocation deadline.
-  // The agent is currently deployed as its own Vercel project. Without this deployer, `mastra build`
-  // succeeds but emits only the standalone `.mastra/output` server; Vercel then creates an empty-looking
-  // "Ready" deployment where every route returns its platform-level NOT_FOUND response.
-  deployer: new VercelDeployer({ maxDuration: 300 }),
+  //
+  // Railway/Render run that standalone build (`mastra build` -> `.mastra/output/index.mjs`, see
+  // railway.agent.toml / scripts/start-combined.mjs). Vercel is a *second*, separately deployed project for
+  // this same app — but setting `deployer` switches what `mastra build` emits for every caller: with it set,
+  // the CLI stops producing `.mastra/output` entirely and only emits `.vercel/output`, which broke the
+  // Railway/Render start command. So the Vercel deployer is only wired in when building on Vercel itself
+  // (which sets VERCEL=1 for both build and runtime); everywhere else the build stays standalone.
+  deployer: process.env.VERCEL ? new VercelDeployer({ maxDuration: 300 }) : undefined,
   agents: { partyPlannerAgent },
   workflows: { partyPlanningWorkflow, conversationalPartyWorkflow },
   tools: { silpoSearchProducts, silpoGetProductDetails, silpoGetSimilarProducts, silpoGetReplacements, findRecipeTool },
