@@ -7,6 +7,10 @@ export type CostProduct = {
   assignedMemberIds: string[];
 };
 
+export function mergePayerIds(baseIds: string[], subscriberIds: string[]) {
+  return [...new Set([...baseIds, ...subscriberIds])];
+}
+
 function splitCents(totalCents: number, memberIds: string[]) {
   if (!memberIds.length) return new Map<string, number>();
   const base = Math.floor(totalCents / memberIds.length);

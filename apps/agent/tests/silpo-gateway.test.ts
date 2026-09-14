@@ -95,6 +95,7 @@ test("normalizes the real Silpo product-detail shape", () => {
       id: "sku-1",
       externalProductId: 123,
       name: "Apple juice 1.5 l",
+      image: { url: "https://images.silpo.ua/apple-juice.webp" },
       price: 72.5,
       available: true,
       stock: 4,
@@ -110,6 +111,7 @@ test("normalizes the real Silpo product-detail shape", () => {
   }, "sku-1"), {
     id: "sku-1",
     name: "Apple juice 1.5 l",
+    imageUrl: "https://images.silpo.ua/apple-juice.webp",
     priceUah: 72.5,
     unit: "шт",
     available: true,
@@ -128,6 +130,20 @@ test("normalizes the real Silpo product-detail shape", () => {
 test("refuses details without an exact matching id or price", () => {
   assert.equal(normalizeSilpoProduct({ id: "other", name: "Product", price: 10 }, "wanted"), null);
   assert.equal(normalizeSilpoProduct({ id: "wanted", name: "Product" }, "wanted"), null);
+});
+
+test("uses the search-result image when product details omit it", () => {
+  const result = normalizeSilpoProduct({ product: {
+    id: "juice",
+    name: "Сік яблучний 1 л",
+    price: 70,
+    available: true,
+    ratio: "шт",
+    displayRatio: "1 л",
+    attributes: {},
+  } }, "juice", { images: ["https://images.silpo.ua/juice.webp"] });
+
+  assert.equal(result?.imageUrl, "https://images.silpo.ua/juice.webp");
 });
 
 test("uses kilograms as the sell unit for weighted products", () => {

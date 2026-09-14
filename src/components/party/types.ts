@@ -21,11 +21,14 @@ export type Member = {
 export type CartItem = {
   id: string;
   name: string;
+  image_url: string | null;
   quantity: number;
   price_uah: number | null;
   package_size: PackageSize | null;
   line_total_uah: number;
+  base_assigned_member_ids: string[];
   assigned_member_ids: string[];
+  subscriber_member_ids: string[];
 };
 
 export type RecipeIngredient = {

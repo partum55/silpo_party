@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mutatePlanItem } from "../src/lib/cart/plan-mutations.ts";
+import { mutatePlanItem, orderCartItemsByPlan } from "../src/lib/cart/plan-mutations.ts";
 
 function product(id: string, quantity: number, assignedMemberIds: string[]) {
   return {
@@ -42,4 +42,15 @@ test("deleting a cart item removes every matching projection and fulfillment ref
   assert.deepEqual(next.products.map((entry) => entry.lookupProductId), ["202"]);
   assert.deepEqual(next.wishFulfillments?.[0].selectedProductIds, ["internal-202-one"]);
   assert.equal(next.totalUah, 25);
+});
+
+test("cart rows keep plan order after quantity updates return them in another database order", () => {
+  const products = [product("101", 1, ["one"]), product("202", 1, ["one"]), product("303", 1, ["one"])];
+  const rows = [
+    { id: "c", product_id: "303" },
+    { id: "a", product_id: "101" },
+    { id: "b", product_id: "202" },
+  ];
+
+  assert.deepEqual(orderCartItemsByPlan(rows, products).map((row) => row.product_id), ["101", "202", "303"]);
 });

@@ -9,9 +9,9 @@ import {
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { assertOk, checkActiveMemberAction, checkFinalize, checkRead } from "@/lib/party/rules";
 import { getMembership, getPartyRow, type Db } from "@/lib/party/access";
-import { calculateMemberTotals, type CostMode } from "@/lib/cart/costs";
+import { calculateMemberTotals, mergePayerIds, type CostMode } from "@/lib/cart/costs";
 import { CartMutationError } from "@/lib/cart/mutation-error";
-import { mutatePlanItem } from "@/lib/cart/plan-mutations";
+import { mutatePlanItem, orderCartItemsByPlan } from "@/lib/cart/plan-mutations";
 import { buildSilpoLineItems } from "@/lib/cart/finalization";
 import { formatUnknownError } from "@/lib/errors";
 
@@ -20,6 +20,7 @@ type PlanProduct = {
   lookupProductId?: string;
   companyId?: string;
   name: string;
+  imageUrl?: string;
   priceUah: number;
   unit: string;
   weighted?: boolean;
@@ -80,12 +81,13 @@ export async function syncCartFromPlan(db: Db, partyId: string, plan: PlanDraft)
   const { error: deleteError } = await db.from("cart_items").delete().eq("party_id", partyId);
   if (deleteError) throw deleteError;
 
-  const grouped = new Map<string, { party_id: string; product_id: string; company_id: string; name: string; price_uah: number; quantity: number; raw: ProjectionRaw }>();
+  const grouped = new Map<string, { party_id: string; product_id: string; company_id: string; name: string; image_url: string | null; price_uah: number; quantity: number; raw: ProjectionRaw }>();
   for (const product of plan?.products ?? []) {
     const productId = product.lookupProductId ?? product.id;
     const existing = grouped.get(productId);
     if (existing) {
       existing.quantity += product.quantity;
+      existing.image_url ??= product.imageUrl ?? null;
       existing.raw.lineTotalUah = Math.round((existing.raw.lineTotalUah + (product.lineTotalUah ?? productLineTotalUah(product, product.quantity))) * 100) / 100;
     }
     else grouped.set(productId, {
@@ -93,6 +95,7 @@ export async function syncCartFromPlan(db: Db, partyId: string, plan: PlanDraft)
       product_id: productId,
       company_id: product.companyId ?? "",
       name: product.name,
+      image_url: product.imageUrl ?? null,
       price_uah: product.priceUah,
       quantity: product.quantity,
       raw: projectionRaw(product),
@@ -102,6 +105,24 @@ export async function syncCartFromPlan(db: Db, partyId: string, plan: PlanDraft)
   if (items.length) {
     const { error: insertError } = await db.from("cart_items").insert(items);
     if (insertError) throw insertError;
+  }
+
+  // Subscriptions survive cart projection rebuilds, but must not return if the agent removes a product.
+  const { data: subscribers, error: subscribersError } = await db
+    .from("cart_item_subscribers")
+    .select("product_id")
+    .eq("party_id", partyId);
+  if (subscribersError) throw subscribersError;
+  const liveProductIds = new Set(items.map((item) => item.product_id));
+  const staleProductIds = [...new Set((subscribers ?? [])
+    .map((row) => row.product_id as string)
+    .filter((productId) => !liveProductIds.has(productId)))];
+  if (staleProductIds.length) {
+    const { error: cleanupError } = await db.from("cart_item_subscribers")
+      .delete()
+      .eq("party_id", partyId)
+      .in("product_id", staleProductIds);
+    if (cleanupError) throw cleanupError;
   }
 
   const { error: updateError } = await db
@@ -117,14 +138,21 @@ export async function getCart(partyId: string, userId: string) {
   const party = await getPartyRow(db, partyId);
   assertOk(checkRead({ isMember: Boolean(role), partyStatus: (party?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null }));
 
-  const [{ data: cart, error: cartError }, { data: items, error: itemsError }, { data: members, error: membersError }] = await Promise.all([
+  const [
+    { data: cart, error: cartError },
+    { data: items, error: itemsError },
+    { data: members, error: membersError },
+    { data: subscribers, error: subscribersError },
+  ] = await Promise.all([
     db.from("carts").select("*").eq("party_id", partyId).maybeSingle(),
-    db.from("cart_items").select("*").eq("party_id", partyId).order("added_at", { ascending: true }),
+    db.from("cart_items").select("*").eq("party_id", partyId).order("added_at", { ascending: true }).order("id", { ascending: true }),
     db.from("party_members").select("user_id").eq("party_id", partyId).order("joined_at", { ascending: true }),
+    db.from("cart_item_subscribers").select("product_id, user_id").eq("party_id", partyId),
   ]);
   if (cartError) throw cartError;
   if (itemsError) throw itemsError;
   if (membersError) throw membersError;
+  if (subscribersError) throw subscribersError;
   const memberIds = (members ?? []).map((member) => member.user_id as string);
   const plan = cart?.plan as PlanDraft;
   const totalUah = Number(cart?.total_uah ?? 0);
@@ -132,25 +160,41 @@ export async function getCart(partyId: string, userId: string) {
   // cart_items is the flattened/merged projection of plan.products (see syncCartFromPlan) and doesn't carry
   // assignedMemberIds itself; look each item's requester(s) back up from the plan for "who asked for this".
   const assignedByProductId = new Map<string, string[]>();
+  const imageByProductId = new Map<string, string>();
   for (const product of plan?.products ?? []) {
     const key = product.lookupProductId ?? product.id;
     const existing = assignedByProductId.get(key) ?? [];
     assignedByProductId.set(key, [...new Set([...existing, ...product.assignedMemberIds])]);
+    if (product.imageUrl && !imageByProductId.has(key)) imageByProductId.set(key, product.imageUrl);
   }
 
-  return {
-    ...cart,
-    items: (items ?? []).map((item) => {
+  const subscribersByProductId = new Map<string, string[]>();
+  for (const subscriber of subscribers ?? []) {
+    const key = subscriber.product_id as string;
+    subscribersByProductId.set(key, [...(subscribersByProductId.get(key) ?? []), subscriber.user_id as string]);
+  }
+
+  const mappedItems = orderCartItemsByPlan(items ?? [], plan?.products ?? [])
+    .map((item) => {
       const raw = isProjectionRaw(item.raw) ? item.raw : null;
+      const baseAssignees = assignedByProductId.get(item.product_id as string) ?? [];
+      const subscriberIds = subscribersByProductId.get(item.product_id as string) ?? [];
       return {
         ...item,
+        image_url: item.image_url ?? imageByProductId.get(item.product_id as string) ?? null,
         package_size: raw?.packageSize ?? null,
         weighted: raw?.weighted ?? false,
         sell_unit: raw?.unit ?? null,
         line_total_uah: raw?.lineTotalUah ?? Number(item.price_uah ?? 0) * Number(item.quantity),
-        assigned_member_ids: assignedByProductId.get(item.product_id as string) ?? [],
+        base_assigned_member_ids: baseAssignees,
+        assigned_member_ids: mergePayerIds(baseAssignees, subscriberIds),
+        subscriber_member_ids: subscriberIds,
       };
-    }),
+    });
+
+  return {
+    ...cart,
+    items: mappedItems,
     recipes: (plan?.recipes ?? []).map((recipe) => ({
       ...recipe,
       cost_uah: recipe.ingredients.reduce(
@@ -162,7 +206,12 @@ export async function getCart(partyId: string, userId: string) {
       party!.mode as CostMode,
       totalUah,
       memberIds,
-      plan?.products ?? [],
+      mappedItems.map((item) => ({
+        priceUah: Number(item.price_uah ?? 0),
+        quantity: Number(item.quantity),
+        lineTotalUah: item.line_total_uah,
+        assignedMemberIds: item.assigned_member_ids,
+      })),
     ),
   };
 }
@@ -223,6 +272,40 @@ export async function mutateCartItem(
   return getCart(partyId, userId);
 }
 
+export async function mutateCartItemSubscription(
+  partyId: string,
+  userId: string,
+  itemId: string,
+  subscribed: boolean,
+) {
+  const db = createSupabaseAdminClient();
+  const [role, party, itemResult] = await Promise.all([
+    getMembership(db, partyId, userId),
+    getPartyRow(db, partyId),
+    db.from("cart_items").select("product_id").eq("party_id", partyId).eq("id", itemId).maybeSingle(),
+  ]);
+  assertOk(checkActiveMemberAction({
+    isMember: Boolean(role),
+    partyStatus: (party?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null,
+  }));
+  if (itemResult.error) throw itemResult.error;
+  if (!itemResult.data) throw new CartMutationError("cart_item_not_found", 404);
+
+  const { error } = await db.rpc("set_cart_item_subscription", {
+    p_party_id: partyId,
+    p_item_id: itemId,
+    p_user_id: userId,
+    p_subscribed: subscribed,
+  });
+  if (error) {
+    if (formatUnknownError(error).includes("cart_item_changed")) {
+      throw new CartMutationError("cart_item_changed", 409);
+    }
+    throw error;
+  }
+  return getCart(partyId, userId);
+}
+
 export type FinalizeResult =
   | { ok: true; checkoutUrl: string | null; droppedItems: string[] }
   | { ok: false; error: string };
@@ -256,6 +339,7 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
       product_id: string;
       silpo_product_id: string;
       company_id: string;
+      image_url: string | null;
       quantity: number;
       price_uah: number;
       name: string;
@@ -275,6 +359,7 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
         product_id: item.product_id,
         silpo_product_id: product.id,
         company_id: product.companyId,
+        image_url: product.imageUrl ?? item.image_url ?? null,
         quantity: purchaseUnits,
         price_uah: product.priceUah,
         name: product.name,
@@ -312,6 +397,7 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
         product_id: item.product_id,
         company_id: item.company_id,
         name: item.name,
+        image_url: item.image_url,
         price_uah: item.price_uah,
         quantity: item.quantity,
         raw: projectionRaw({

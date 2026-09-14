@@ -94,5 +94,5 @@ export async function finalizeCartAction(formData: FormData) {
     if (!(error instanceof RuleViolation)) throw error;
   }
   revalidatePath(`/parties/${partyId}`);
-  redirect(`/parties/${partyId}`);
+  redirect(`/parties/${partyId}?tab=plan`);
 }
