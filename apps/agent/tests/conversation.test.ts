@@ -9,7 +9,7 @@ import {
 } from "../src/domain/conversation.ts";
 import { memberSchema } from "../src/domain/schemas.ts";
 import type { PartyPlanDraft, VerifiedProduct } from "../src/domain/validation.ts";
-import { conversationInputSchema, readOnlyResult } from "../src/mastra/conversational-workflow.ts";
+import { conversationInputSchema, planAfterValidation, readOnlyResult } from "../src/mastra/conversational-workflow.ts";
 
 const product = (id: string): VerifiedProduct => ({
   id: `sku-${id}`,
@@ -168,6 +168,14 @@ test("read-only cost questions return frozen preferences and plan", () => {
   assert.deepEqual(result.preferenceOperations, []);
   assert.deepEqual(result.planOperations, []);
   assert.equal(result.readiness, "ready");
+});
+
+test("an invalid first draft is never persisted", () => {
+  const invalidMilkPlan = existingPlan();
+
+  assert.equal(planAfterValidation(null, invalidMilkPlan, "invalid"), null);
+  assert.equal(planAfterValidation(existingPlan(), invalidMilkPlan, "invalid")?.summary, "Existing");
+  assert.equal(planAfterValidation(null, invalidMilkPlan, "ready"), invalidMilkPlan);
 });
 
 test("participant readiness and host authorization stay outside model control", () => {
