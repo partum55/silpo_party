@@ -22,7 +22,7 @@ export function ProfileMenu({ user, connected }: { user: User; connected: boolea
         <p className="text-xs text-ink-soft">
           Silpo: <span className={connected ? "text-basil" : "text-danger"}>{connected ? "підключено" : "не підключено"}</span>
         </p>
-        <form action="/auth/logout" method="post">
+        <form action="/auth/logout" method="post" noValidate>
           <button className={`${buttonClasses("secondary", "sm")} w-full`} type="submit">
             Вийти
           </button>

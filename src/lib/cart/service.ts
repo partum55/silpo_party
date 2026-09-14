@@ -4,14 +4,15 @@ import {
   createSilpoGateway,
   extractCheckoutUrl,
   productLineTotalUah,
-  silpoCartQuantity,
-  type CartLineItem,
 } from "@silpo-party/agent/gateway";
 
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { assertOk, checkFinalize, checkRead } from "@/lib/party/rules";
+import { assertOk, checkActiveMemberAction, checkFinalize, checkRead } from "@/lib/party/rules";
 import { getMembership, getPartyRow, type Db } from "@/lib/party/access";
 import { calculateMemberTotals, type CostMode } from "@/lib/cart/costs";
+import { CartMutationError } from "@/lib/cart/mutation-error";
+import { mutatePlanItem } from "@/lib/cart/plan-mutations";
+import { buildSilpoLineItems } from "@/lib/cart/finalization";
 import { formatUnknownError } from "@/lib/errors";
 
 type PlanProduct = {
@@ -166,6 +167,62 @@ export async function getCart(partyId: string, userId: string) {
   };
 }
 
+export async function mutateCartItem(
+  partyId: string,
+  userId: string,
+  itemId: string,
+  quantity: number | null,
+) {
+  if (quantity !== null && (!Number.isSafeInteger(quantity) || quantity < 1)) {
+    throw new CartMutationError("invalid_quantity", 400);
+  }
+
+  const db = createSupabaseAdminClient();
+  const [role, partyResult, cartResult, itemResult] = await Promise.all([
+    getMembership(db, partyId, userId),
+    getPartyRow(db, partyId),
+    db.from("carts").select("plan, total_uah, status").eq("party_id", partyId).maybeSingle(),
+    db.from("cart_items").select("*").eq("party_id", partyId).eq("id", itemId).maybeSingle(),
+  ]);
+  assertOk(checkActiveMemberAction({
+    isMember: Boolean(role),
+    partyStatus: (partyResult?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null,
+  }));
+  if (cartResult.error) throw cartResult.error;
+  if (itemResult.error) throw itemResult.error;
+  if (!itemResult.data || !cartResult.data) throw new CartMutationError("cart_item_not_found", 404);
+
+  const item = itemResult.data;
+  const oldQuantity = Number(item.quantity);
+  const raw = isProjectionRaw(item.raw) ? item.raw : null;
+  const oldLineTotal = raw?.lineTotalUah ?? Number(item.price_uah ?? 0) * oldQuantity;
+  const unitLineTotal = oldQuantity > 0 ? oldLineTotal / oldQuantity : Number(item.price_uah ?? 0);
+  const nextLineTotal = quantity === null ? 0 : Math.round(unitLineTotal * quantity * 100) / 100;
+  const plan = mutatePlanItem(cartResult.data.plan as PlanDraft, item.product_id as string, quantity);
+  const fallbackTotal = Math.round(
+    (Number(cartResult.data.total_uah ?? 0) - oldLineTotal + nextLineTotal) * 100,
+  ) / 100;
+  const totalUah = plan?.totalUah ?? Math.max(0, fallbackTotal);
+
+  const { error } = await db.rpc("apply_cart_item_mutation", {
+    p_party_id: partyId,
+    p_item_id: itemId,
+    p_expected_quantity: oldQuantity,
+    p_quantity: quantity ?? oldQuantity,
+    p_line_total_uah: nextLineTotal,
+    p_plan: plan,
+    p_total_uah: totalUah,
+    p_delete: quantity === null,
+  });
+  if (error) {
+    if (formatUnknownError(error).includes("cart_item_changed")) {
+      throw new CartMutationError("cart_item_changed", 409);
+    }
+    throw error;
+  }
+  return getCart(partyId, userId);
+}
+
 export type FinalizeResult =
   | { ok: true; checkoutUrl: string | null; droppedItems: string[] }
   | { ok: false; error: string };
@@ -188,12 +245,16 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
 
   const gateway = createSilpoGateway(party!.creator_id);
   try {
-    await db.from("parties").update({ agent_status: "UPDATING_CART", agent_error: null }).eq("id", partyId);
+    const { error: statusError } = await db.from("parties")
+      .update({ agent_status: "UPDATING_CART", agent_error: null })
+      .eq("id", partyId);
+    if (statusError) throw statusError;
 
-    // Final refresh: re-hydrate every item for current price/availability; drop what's gone rather than fail.
+    // Final refresh is all-or-nothing: validate the complete local basket before touching the real Silpo cart.
     const droppedItems: string[] = [];
     const refreshed: Array<{
       product_id: string;
+      silpo_product_id: string;
       company_id: string;
       quantity: number;
       price_uah: number;
@@ -212,6 +273,7 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
       const purchaseUnits = Number(item.quantity);
       refreshed.push({
         product_id: item.product_id,
+        silpo_product_id: product.id,
         company_id: product.companyId,
         quantity: purchaseUnits,
         price_uah: product.priceUah,
@@ -223,21 +285,29 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
       });
     }
 
+    if (droppedItems.length) {
+      throw new Error(`Не вдалося додати всі товари: ${droppedItems.join(", ")}. Оновіть кошик і спробуйте ще раз.`);
+    }
+
     const context = await gateway.getDeliveryContext();
-    const lineItems: CartLineItem[] = refreshed.map((item) => ({
-      productId: item.product_id,
+    const lineItems = buildSilpoLineItems(refreshed.map((item) => ({
+      silpoProductId: item.silpo_product_id,
       companyId: item.company_id,
-      branchId: context.branchId,
-      quantity: silpoCartQuantity({ ...item, priceUah: item.price_uah }, item.quantity),
-    }));
+      priceUah: item.price_uah,
+      unit: item.unit,
+      weighted: item.weighted,
+      packageSize: item.packageSize,
+      quantity: item.quantity,
+    })), context.branchId);
     await gateway.syncCartProducts(lineItems);
     const finalCart = await gateway.getFinalCart();
     const checkoutUrl = extractCheckoutUrl(finalCart);
 
     const nowIso = new Date().toISOString();
-    await db.from("cart_items").delete().eq("party_id", partyId);
+    const { error: deleteError } = await db.from("cart_items").delete().eq("party_id", partyId);
+    if (deleteError) throw deleteError;
     if (refreshed.length) {
-      await db.from("cart_items").insert(refreshed.map((item) => ({
+      const { error: insertError } = await db.from("cart_items").insert(refreshed.map((item) => ({
         party_id: partyId,
         product_id: item.product_id,
         company_id: item.company_id,
@@ -255,20 +325,23 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
           assignedMemberIds: [],
         }, item.lineTotalUah),
       })));
+      if (insertError) throw insertError;
     }
     const totalUah = Math.round(refreshed.reduce((sum, item) => sum + item.lineTotalUah, 0) * 100) / 100;
-    await db.from("carts").update({
+    const { error: cartUpdateError } = await db.from("carts").update({
       status: "FINALIZED",
       total_uah: totalUah,
       checkout_url: checkoutUrl,
       finalized_at: nowIso,
       updated_at: nowIso,
     }).eq("party_id", partyId);
-    await db.from("parties").update({
+    if (cartUpdateError) throw cartUpdateError;
+    const { error: partyUpdateError } = await db.from("parties").update({
       status: "COMPLETED",
       agent_status: "DONE",
       completed_at: nowIso,
     }).eq("id", partyId);
+    if (partyUpdateError) throw partyUpdateError;
 
     return { ok: true, checkoutUrl, droppedItems };
   } catch (error) {

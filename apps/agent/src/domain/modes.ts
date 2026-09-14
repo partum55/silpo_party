@@ -31,7 +31,7 @@ export function validateModeAssignments({
 
   if (mode === "SHOPPING") {
     if (newRecipes.length || changedProducts.some((product) => !sameIds(product.assignedMemberIds, [actorId]))) {
-      return [{ code: "plan_operation_unfulfilled", message: "Shopping purchases must be direct products charged only to the requesting participant." }];
+      return [{ code: "plan_operation_unfulfilled", message: "У режимі покупок потрібні прямі товари, призначені лише учаснику, який їх попросив." }];
     }
     return [];
   }
@@ -39,7 +39,7 @@ export function validateModeAssignments({
   const invalidSharedItem = changedProducts.some((product) => !sameIds(product.assignedMemberIds, memberIds))
     || newRecipes.some((recipe) => !sameIds(recipe.assignedMemberIds, memberIds));
   return invalidSharedItem
-    ? [{ code: "plan_operation_unfulfilled", message: "Autonomous event purchases must be shared by every current participant." }]
+    ? [{ code: "plan_operation_unfulfilled", message: "Покупки для події мають бути спільними для всіх поточних учасників." }]
     : [];
 }
 
