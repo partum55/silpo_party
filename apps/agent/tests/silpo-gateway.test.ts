@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  extractFoodRestrictions,
   extractSearchProductIds,
   hasTimeslot,
   listSilpoToolSchemas,
@@ -12,6 +13,7 @@ import {
 } from "../src/silpo/gateway.ts";
 
 const requiredTools = [
+  "silpo_get_my_food_restrictions",
   "silpo_get_my_shopping_cart",
   "silpo_get_shopping_cart_by_id",
   "silpo_get_time_slots",
@@ -20,6 +22,25 @@ const requiredTools = [
   "silpo_get_similar_products",
   "silpo_get_replacements",
 ];
+
+test("normalizes active food restrictions from Silpo profile responses", () => {
+  assert.deepEqual(extractFoodRestrictions({
+    success: true,
+    foodRestrictions: [
+      { name: "Без лактози", selected: true },
+      { label: "Без глютену", enabled: false },
+      { code: "vegetarian", active: true },
+    ],
+  }), ["Без лактози", "vegetarian"]);
+
+  assert.deepEqual(extractFoodRestrictions({
+    content: [{ type: "text", text: JSON.stringify({ restrictions: { lactoseFree: true, vegan: false } }) }],
+  }), ["lactoseFree"]);
+
+  assert.deepEqual(extractFoodRestrictions({
+    data: { dietaryRestrictions: [{ title: "Vegan", status: "active" }] },
+  }), ["Vegan"]);
+});
 
 test("extracts unique external product ids from Silpo search candidates", () => {
   assert.deepEqual(extractSearchProductIds({ groups: [{ items: [

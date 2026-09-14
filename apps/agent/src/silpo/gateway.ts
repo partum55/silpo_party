@@ -8,6 +8,7 @@ export type SilpoToolSchema = { properties?: Record<string, object>; required?: 
 type SilpoToolSchemas = Map<string, SilpoToolSchema>;
 
 const requiredAgentTools = [
+  "silpo_get_my_food_restrictions",
   "silpo_get_my_shopping_cart",
   "silpo_get_shopping_cart_by_id",
   "silpo_get_time_slots",
@@ -189,6 +190,49 @@ function decodeToolResult(result: unknown) {
   return values.length === 1 ? values[0] : values;
 }
 
+const restrictionContainerNames = [
+  "restrictions",
+  "foodRestrictions",
+  "dietaryRestrictions",
+  "preferences",
+  "foodPreferences",
+  "items",
+] as const;
+
+const restrictionLabelNames = ["name", "title", "label", "displayName", "description", "type", "code"] as const;
+
+function isInactiveRestriction(value: JsonObject) {
+  return ["active", "enabled", "selected", "isActive", "isEnabled", "isSelected"]
+    .some((name) => field(value, [name]) === false)
+    || /^(?:inactive|disabled|unselected)$/i.test(String(field(value, ["status"]) ?? ""));
+}
+
+function restrictionValues(value: unknown): string[] {
+  if (typeof value === "string") return value.trim() ? [value.trim()] : [];
+  if (Array.isArray(value)) return value.flatMap(restrictionValues);
+  if (!isObject(value) || isInactiveRestriction(value)) return [];
+
+  const labels = restrictionLabelNames.flatMap((name) => strings(field(value, [name])));
+  const booleanLabels = Object.entries(value).flatMap(([name, enabled]) =>
+    enabled === true && !/^(?:active|enabled|selected|isActive|isEnabled|isSelected|success)$/i.test(name)
+      ? [name]
+      : []);
+  const nested = restrictionContainerNames.flatMap((name) => restrictionValues(field(value, [name])));
+  return [...labels, ...booleanLabels, ...nested];
+}
+
+/** Normalizes the intentionally schema-flexible Silpo profile response into restriction labels for the planner. */
+export function extractFoodRestrictions(payload: unknown): string[] {
+  const decoded = decodeToolResult(payload);
+  const roots = objects(decoded).flatMap((candidate) =>
+    restrictionContainerNames.flatMap((name) => {
+        const value = field(candidate, [name]);
+        return value === undefined ? [] : [value];
+      }));
+  const values = roots.length ? roots.flatMap(restrictionValues) : restrictionValues(decoded);
+  return [...new Map(values.map((value) => [value.toLocaleLowerCase("uk"), value])).values()];
+}
+
 async function call(client: SilpoClient, name: string, args: JsonObject) {
   return decodeToolResult(await withTimeout(
     client.callTool({ name, arguments: args }),
@@ -311,6 +355,8 @@ export function createSilpoGateway(userId: string) {
   }
 
   return {
+    getFoodRestrictions: () => withClient(async (client) =>
+      extractFoodRestrictions(await call(client, "silpo_get_my_food_restrictions", {}))),
     searchVerified: (queries: string[], limit = 12) => withClient(async (client, schemas) => {
       const context = await getContext(client, schemas);
       const searches = await Promise.all(queries.map((query) => call(client, "silpo_find_products_batch", {
