@@ -238,9 +238,9 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
       decision = undefined;
     }
     if (!decision) {
-      // The model's JSON didn't satisfy conversationDecisionSchema's validation (structuredOutput throws in
-      // that case rather than returning an object) — fail soft instead of crashing the whole turn.
-      return readOnlyResult(inputData, "Не вдалося зрозуміти повідомлення. Спробуйте сформулювати його інакше.");
+      // Provider timeouts and invalid structured output both leave this turn without a usable decision.
+      // Keep the existing state and report an availability problem instead of blaming the user's wording.
+      return readOnlyResult(inputData, "Сервіс агента тимчасово не відповідає. Спробуйте ще раз за хвилину.");
     }
     const applied = applyConversationDecision({
       party: inputData.currentParty,

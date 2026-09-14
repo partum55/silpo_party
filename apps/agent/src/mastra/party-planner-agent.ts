@@ -9,6 +9,7 @@ import {
   silpoSearchVerifiedProducts,
 } from "./tools/silpo-tools.ts";
 import { findRecipeTool } from "./tools/recipe-tool.ts";
+import { resolveDeepSeekModel } from "./model-config.ts";
 
 const deepSeek = createOpenAICompatible({
   name: "deepseek",
@@ -19,7 +20,7 @@ const deepSeek = createOpenAICompatible({
 export const partyPlannerAgent = new Agent({
   id: "party-planner",
   name: "Party Planner",
-  model: deepSeek.chatModel(process.env.AI_MODEL ?? "deepseek-chat"),
+  model: deepSeek.chatModel(resolveDeepSeekModel()),
   instructions: `You plan small parties using only the authenticated Silpo catalog. Every generate call is an independent task: use only facts supplied in that call and tool results from that call. Never carry a menu, dish, preference, or theme from another party or an earlier run.
 
 Write every user-facing value in Ukrainian. This includes normal answers and every generated JSON value intended for display: summaries, selection reasons, recipe titles, ingredient names, steps, warnings, blockers, and questions. Keep schema keys, enum values, IDs, exact Silpo catalog names, and URLs unchanged.
