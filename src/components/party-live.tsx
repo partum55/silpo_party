@@ -91,7 +91,11 @@ export function PartyLive({
           setMessages((previous) => (previous.some((message) => message.id === next.id) ? previous : [...previous, next]));
         },
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        // No UI depends on this — it's here so a silent Realtime connection failure (RLS denial, network
+        // issue) shows up in the browser console instead of just looking like "nothing updates live".
+        if (status !== "SUBSCRIBED") console.log(`[party-live] realtime channel status: ${status}`, err ?? "");
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -115,6 +119,11 @@ export function PartyLive({
         body: JSON.stringify({ content: text }),
       });
       if (!response.ok) throw new Error(await response.text());
+      // Show it immediately from the response rather than waiting on the Realtime echo — same id, so the
+      // later postgres_changes INSERT for this same row (if it arrives at all, and whenever it does) is
+      // correctly deduped by the handler above instead of appearing as a second copy.
+      const sent = (await response.json()) as ChatMessage;
+      setMessages((previous) => (previous.some((message) => message.id === sent.id) ? previous : [...previous, sent]));
     } catch {
       setContent(text); // put it back so nothing is silently lost
     } finally {
