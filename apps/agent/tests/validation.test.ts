@@ -141,6 +141,16 @@ const products: Record<string, HydratedProduct> = {
     packageSize: { amount: 900, unit: "ml" },
     metadata: { ingredients: ["молоко коров'яче"], allergens: ["молоко"], labels: [] },
   },
+  kvassWithoutMetadata: {
+    id: "kvassWithoutMetadata",
+    name: "Квас «Квас Тарас» «Чорний» з/б",
+    priceUah: 34,
+    unit: "шт",
+    available: true,
+    category: "drink",
+    packageSize: { amount: 500, unit: "ml" },
+    metadata: { ingredients: [], allergens: [], labels: [] },
+  },
 };
 
 function proposal(selections: PlannerProposal["selections"]): PlannerProposal {
@@ -383,6 +393,19 @@ test("a lactose restriction rejects regular milk and accepts lactose-free milk",
 
   assert.ok(regular.blockers.some((blocker) => blocker.code === "restriction_violation"));
   assert.equal(lactoseFree.readiness, "ready");
+});
+
+test("a lactose restriction accepts a clearly non-dairy drink when Silpo omits metadata", async () => {
+  const result = await validateProposal({
+    input: { request: "Додай квас", currentParty: { members: [{ id: "a", restrictions: ["lactose"] }] } },
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([{ productId: "kvassWithoutMetadata", quantity: 1, assignedMemberIds: ["a"], reason: "Kvass" }]),
+    hydrate,
+    targets: { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 },
+  });
+
+  assert.equal(result.readiness, "ready");
 });
 
 test("ambiguous processed food without evidence remains unverified", async () => {

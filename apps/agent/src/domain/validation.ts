@@ -101,13 +101,14 @@ type IngredientRestrictionRule = {
   forbidden: RegExp;
   explicitlySafe: RegExp;
   forbiddenName?: RegExp;
+  allowUnlabeledDrinks?: boolean;
 };
 
 // Covers the common dietary exclusions and the major food-allergen families returned by Silpo. These are
 // deliberately stem-based because profile values and catalog attributes may independently be Ukrainian or
 // English and use different grammatical forms.
 const ingredientRestrictionRules: IngredientRestrictionRule[] = [
-  { restriction: /lactose|lactoza|лактоз/, forbidden: /lactose|лактоз|milk|cream|молок|вершк/, explicitlySafe: /lactose[- ]?free|без\s*лактоз|безлактоз/, forbiddenName: /молоко|вершк|сметан|кефір|йогурт|dairy milk|cow'?s? milk|cream|yogurt|kefir/ },
+  { restriction: /lactose|lactoza|лактоз/, forbidden: /lactose|лактоз|milk|cream|молок|вершк/, explicitlySafe: /lactose[- ]?free|без\s*лактоз|безлактоз/, forbiddenName: /молоко|вершк|сметан|кефір|йогурт|dairy milk|cow'?s? milk|cream|yogurt|kefir/, allowUnlabeledDrinks: true },
   { restriction: /gluten|глютен|celiac|целіак/, forbidden: /gluten|wheat|barley|rye|spelt|пшениц|ячмін|жит(?:о|н)|полб/, explicitlySafe: /gluten[- ]?free|без\s*глютен|безглютен/ },
   { restriction: /peanut|арахіс/, forbidden: /peanut|groundnut|арахіс/, explicitlySafe: /peanut[- ]?free|без\s*арахіс/ },
   { restriction: /tree nuts?|горіх|мигдал|фундук|кеш['’]?ю|фісташ/, forbidden: /tree nuts?|nut|almond|hazelnut|cashew|pistachio|walnut|pecan|macadamia|горіх|мигдал|фундук|кеш['’]?ю|фісташ|пекан|макадам/, explicitlySafe: /nut[- ]?free|без\s*горіх/ },
@@ -192,6 +193,9 @@ function restrictionSafety(product: HydratedProduct, restriction: string): Restr
     if (rule.explicitlySafe.test(`${name} ${labels}`)) return "safe";
     if (rule.forbidden.test(`${ingredients} ${allergens}`) || rule.forbiddenName?.test(name)) return "unsafe";
     if (hasReadableComposition(ingredients, allergens) || isObviouslyUnaffectedWholeFood(product, name)) return "safe";
+    // Silpo omits composition/allergen attributes for some catalog drinks (observed for kvass). A named
+    // non-dairy beverage cannot violate lactose intolerance merely because that optional metadata is absent.
+    if (rule.allowUnlabeledDrinks && product.category === "drink") return "safe";
   }
 
   // Unknown profile restrictions are never silently ignored. The planner may only use a product when its
