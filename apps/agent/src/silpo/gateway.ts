@@ -226,6 +226,12 @@ export type CartLineItem = { productId: string; companyId: string; branchId: str
 
 export function createSilpoGateway(userId: string) {
   let schemasPromise: Promise<SilpoToolSchemas> | null = null;
+  // Cached per gateway instance (i.e. per conversational turn — see conversationalTurn/discoverCandidates/
+  // planAndValidate, each of which creates one gateway). Branch/delivery/timeslot context doesn't change
+  // within a single turn, but cartContext() itself costs 3 sequential Silpo calls — recomputing it on every
+  // single search/hydrate/similar/replacements call (dozens of times per turn) was the dominant source of
+  // agent latency.
+  let contextPromise: ReturnType<typeof cartContext> | null = null;
 
   async function withClient<T>(operation: (client: SilpoClient, schemas: SilpoToolSchemas) => Promise<T>) {
     return serializeSilpoOperation(userId, async () => {
@@ -240,8 +246,16 @@ export function createSilpoGateway(userId: string) {
     });
   }
 
+  function getContext(client: SilpoClient, schemas: SilpoToolSchemas) {
+    contextPromise ??= cartContext(client, schemas).catch((error) => {
+      contextPromise = null;
+      throw error;
+    });
+    return contextPromise;
+  }
+
   async function productReference(client: SilpoClient, schemas: SilpoToolSchemas, productId: string) {
-    const context = await cartContext(client, schemas);
+    const context = await getContext(client, schemas);
     const search = await call(client, "silpo_find_products_batch", { ...context, products: [productId], limit: 10 });
     const match = objects(search).find((candidate) => String(field(candidate, ["externalProductId"]) ?? "") === productId);
     if (!match) return null;
@@ -263,12 +277,12 @@ export function createSilpoGateway(userId: string) {
 
   return {
     search: (query: string) => withClient(async (client, schemas) => call(client, "silpo_find_products_batch", {
-      ...await cartContext(client, schemas),
+      ...await getContext(client, schemas),
       products: [query],
       limit: 10,
     })),
     searchProductIds: (query: string) => withClient(async (client, schemas) => extractSearchProductIds(await call(client, "silpo_find_products_batch", {
-      ...await cartContext(client, schemas),
+      ...await getContext(client, schemas),
       products: [query],
       limit: 10,
     }))),
@@ -314,7 +328,9 @@ export function createSilpoGateway(userId: string) {
       return fetchCart(client, shoppingCartId);
     }),
     getFinalCart: () => withClient(async (client) => fetchCart(client, await ensureCart(client))),
-    // The branchId every cart line item must share when writing via syncCartProducts.
-    getDeliveryContext: () => withClient(async (client, schemas) => cartContext(client, schemas)),
+    // The branchId every cart line item must share when writing via syncCartProducts. Shares the same cache
+    // as search/hydrate, so a finalize that just refreshed every item via hydrate() reuses that context
+    // instead of recomputing it (and stays consistent with whatever branch those refreshes were scoped to).
+    getDeliveryContext: () => withClient(async (client, schemas) => getContext(client, schemas)),
   };
 }
