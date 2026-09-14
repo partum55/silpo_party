@@ -1,0 +1,8 @@
+/home/partum/Projects/silpo_party/AGENTS.md
+/home/partum/Projects/silpo_party/CLAUDE.md
+/home/partum/Projects/silpo_party/README.md
+/home/partum/Projects/silpo_party/public/file.svg
+/home/partum/Projects/silpo_party/public/globe.svg
+/home/partum/Projects/silpo_party/public/next.svg
+/home/partum/Projects/silpo_party/public/vercel.svg
+/home/partum/Projects/silpo_party/public/window.svg
