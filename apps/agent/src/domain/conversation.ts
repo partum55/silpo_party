@@ -161,17 +161,17 @@ export function validatePlanOperations(before: PartyPlanDraft | null, after: Par
     if (operation.action === "add") {
       const fulfilled = addedProducts.some((product) => operation.assignedMemberIds.every((id) => product.assignedMemberIds.includes(id)))
         || addedRecipes.some((recipe) => operation.assignedMemberIds.every((id) => recipe.assignedMemberIds.includes(id)));
-      return fulfilled ? [] : [{ code: "plan_operation_unfulfilled" as const, message: `No new plan component fulfills: ${operation.request}.` }];
+      return fulfilled ? [] : [{ code: "plan_operation_unfulfilled" as const, message: `Новий елемент плану не виконує запит: ${operation.request}.` }];
     }
     const targetExists = operation.targetType === "product" ? beforeProducts.has(operation.targetId) : beforeRecipes.has(operation.targetId);
-    if (!targetExists) return [{ code: "plan_operation_unfulfilled" as const, message: `${operation.targetId} is not in the current plan.` }];
+    if (!targetExists) return [{ code: "plan_operation_unfulfilled" as const, message: `${operation.targetId} відсутній у поточному плані.` }];
     const targetStillExists = operation.targetType === "product" ? afterProducts.has(operation.targetId) : afterRecipes.has(operation.targetId);
     if (operation.action === "remove") {
-      return targetStillExists ? [{ code: "plan_operation_unfulfilled" as const, message: `${operation.targetId} was not removed.` }] : [];
+      return targetStillExists ? [{ code: "plan_operation_unfulfilled" as const, message: `${operation.targetId} не видалено.` }] : [];
     }
     const replacementAdded = addedProducts.length > 0 || addedRecipes.length > 0;
     return !targetStillExists && replacementAdded
       ? []
-      : [{ code: "plan_operation_unfulfilled" as const, message: `${operation.targetId} was not replaced.` }];
+      : [{ code: "plan_operation_unfulfilled" as const, message: `${operation.targetId} не замінено.` }];
   });
 }

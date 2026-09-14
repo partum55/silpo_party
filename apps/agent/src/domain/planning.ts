@@ -117,7 +117,7 @@ export function applyGatheredContext(
   if (context.participantCountMentioned !== null && context.participantCountMentioned !== participantCount) {
     warnings.push({
       code: "participant_count_conflict",
-      message: `The request mentions ${context.participantCountMentioned} people, but the current party has ${participantCount}; current members were used.`,
+      message: `У запиті згадано ${context.participantCountMentioned} людей, але у вечірці зараз ${participantCount}; використано поточний список учасників.`,
     });
   }
   return {
@@ -168,8 +168,8 @@ export async function runPlanningLoop(
   if (!state.participantCount) {
     return {
       ...state,
-      blockers: [{ code: "party_members_required", message: "Add at least one current party member." }],
-      questions: [{ code: "party_members_required", prompt: "Who is currently attending the party?" }],
+      blockers: [{ code: "party_members_required", message: "Додайте хоча б одного учасника вечірки." }],
+      questions: [{ code: "party_members_required", prompt: "Хто зараз бере участь у вечірці?" }],
       readiness: "needs_input",
     };
   }

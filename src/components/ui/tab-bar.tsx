@@ -31,7 +31,7 @@ export function TabBar<T extends string>({
             <span className="relative">
               {tab.icon}
               {Boolean(tab.badge) && (
-                <span className="absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-tomato text-[0.6rem] text-white">
+                <span className="absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-tomato text-[0.6rem] text-ink">
                   {tab.badge}
                 </span>
               )}

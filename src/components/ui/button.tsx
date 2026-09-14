@@ -11,9 +11,10 @@ export function Button({
   variant = "primary",
   size = "md",
   className = "",
+  onClick,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: ButtonSize }) {
-  return <button className={`${buttonClasses(variant, size)} ${className}`} {...props} />;
+  return <button className={`${buttonClasses(variant, size)} ${className}`} onClick={onClick} {...props} />;
 }
 
 /** Submit button for a `<form action={...}>` that shows pending state without any local state wiring. */

@@ -5,7 +5,7 @@ import { SparkleIcon } from "@/components/ui/icons";
 import type { ChatMessage, Member } from "./types";
 
 function bubbleClass(mine: boolean, senderType: ChatMessage["sender_type"]) {
-  if (mine) return "bg-tomato text-white";
+  if (mine) return "bg-tomato text-ink";
   if (senderType === "AGENT") return "bg-plum/10 text-ink border border-plum/20";
   return "bg-paper-raised border border-stone text-ink";
 }

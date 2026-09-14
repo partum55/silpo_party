@@ -220,8 +220,10 @@ export function PartyLive({
             members={members}
             currentUserId={currentUserId}
             isCreator={isCreator}
+            partyId={partyId}
+            onCartUpdated={setCart}
             budgetForm={
-              <form action={updatePartyBudgetAction} className="flex gap-2">
+              <form action={updatePartyBudgetAction} noValidate className="flex gap-2">
                 <input type="hidden" name="partyId" value={partyId} />
                 <input
                   name="budgetUah"
@@ -238,19 +240,19 @@ export function PartyLive({
             actions={
               <>
                 {isCreator && isActive && cart.items.length > 0 && (
-                  <form action={finalizeCartAction} className="flex-1">
+                  <form action={finalizeCartAction} noValidate className="flex-1">
                     <input type="hidden" name="partyId" value={partyId} />
                     <SubmitButton pendingText="Оформлюємо…" className="w-full">Фіналізувати кошик</SubmitButton>
                   </form>
                 )}
                 {!isCreator && isActive && (
-                  <form action={leavePartyAction}>
+                  <form action={leavePartyAction} noValidate>
                     <input type="hidden" name="partyId" value={partyId} />
                     <SubmitButton variant="secondary" pendingText="…">Покинути вечірку</SubmitButton>
                   </form>
                 )}
                 {isCreator && (
-                  <form action={deletePartyAction}>
+                  <form action={deletePartyAction} noValidate>
                     <input type="hidden" name="partyId" value={partyId} />
                     <SubmitButton variant="destructive" pendingText="…">Видалити вечірку</SubmitButton>
                   </form>
@@ -262,7 +264,7 @@ export function PartyLive({
       </div>
 
       {tab === "chat" && isActive && (
-        <form onSubmit={send} className="flex shrink-0 gap-2 border-t border-stone bg-paper-raised px-3 py-2.5">
+        <form onSubmit={send} noValidate className="flex shrink-0 gap-2 border-t border-stone bg-paper-raised px-3 py-2.5">
           <input
             value={content}
             onChange={(event) => setContent(event.target.value)}

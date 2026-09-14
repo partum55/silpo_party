@@ -1,4 +1,5 @@
 import { RuleViolation } from "@/lib/party/rules";
+import { CartMutationError } from "@/lib/cart/mutation-error";
 
 const statusByCode: Record<string, number> = {
   not_found: 404,
@@ -12,6 +13,9 @@ const statusByCode: Record<string, number> = {
 };
 
 export function toErrorResponse(error: unknown) {
+  if (error instanceof CartMutationError) {
+    return Response.json({ error: error.code }, { status: error.status });
+  }
   if (error instanceof RuleViolation) {
     return Response.json({ error: error.code }, { status: statusByCode[error.code] ?? 400 });
   }

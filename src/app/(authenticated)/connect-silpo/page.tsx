@@ -26,7 +26,7 @@ export default async function ConnectSilpoPage({
           </p>
         </div>
         {error && <InlineAlert tone="error">Не вдалося підключити Silpo. Спробуйте ще раз.</InlineAlert>}
-        <form action="/auth/silpo/start" method="post">
+        <form action="/auth/silpo/start" method="post" noValidate>
           <button className={`${buttonClasses("primary", "md")} w-full`} type="submit">
             Підключити Silpo
           </button>

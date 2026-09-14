@@ -185,17 +185,17 @@ export async function validateProposal({
   for (const selection of proposal.selections) {
     const product = await hydrate(selection.productId);
     if (!product) {
-      blockers.push({ code: "product_not_found", message: `Silpo product ${selection.productId} was not found.`, productId: selection.productId });
+      blockers.push({ code: "product_not_found", message: `Товар Silpo ${selection.productId} не знайдено.`, productId: selection.productId });
       continue;
     }
     if (!product.available) {
-      blockers.push({ code: "product_unavailable", message: `${product.name} is unavailable.`, productId: product.id });
+      blockers.push({ code: "product_unavailable", message: `Товар «${product.name}» недоступний.`, productId: product.id });
       continue;
     }
     const assignedIds = [...new Set(selection.assignedMemberIds)];
     const unknownIds = assignedIds.filter((id) => !members.has(id));
     if (unknownIds.length) {
-      blockers.push({ code: "invalid_assignment", message: `${product.name} is assigned to unknown party members.`, productId: product.id });
+      blockers.push({ code: "invalid_assignment", message: `Товар «${product.name}» призначено невідомим учасникам.`, productId: product.id });
       continue;
     }
 
@@ -205,9 +205,9 @@ export async function validateProposal({
       const restrictions = [...new Set([...partyWideRestrictions, ...(member.restrictions ?? [])])];
       const results = restrictions.map((restriction) => restrictionSafety(product, restriction));
       if (results.includes("unsafe")) {
-        blockers.push({ code: "restriction_violation", message: `${product.name} is unsafe for ${member.name ?? member.id}.`, productId: product.id, memberId });
+        blockers.push({ code: "restriction_violation", message: `Товар «${product.name}» не підходить для ${member.name ?? member.id}.`, productId: product.id, memberId });
       } else if (results.includes("unknown")) {
-        blockers.push({ code: "restriction_unverified", message: `${product.name} cannot be verified for ${member.name ?? member.id}.`, productId: product.id, memberId });
+        blockers.push({ code: "restriction_unverified", message: `Не вдалося перевірити товар «${product.name}» для ${member.name ?? member.id}.`, productId: product.id, memberId });
       } else {
         safeIds.push(memberId);
       }
@@ -228,7 +228,7 @@ export async function validateProposal({
       lookupProductId: selection.productId,
       quantity: selection.quantity,
       assignedMemberIds: assignedIds,
-      reason: `Assigned to ${assignedIds.length} participant${assignedIds.length === 1 ? "" : "s"}.`,
+      reason: `Призначено для ${assignedIds.length} учасн${assignedIds.length === 1 ? "ика" : "иків"}.`,
       lineTotalUah: productLineTotalUah(product, selection.quantity),
     };
     selectedProducts.push(verified);
@@ -240,13 +240,13 @@ export async function validateProposal({
     if (proposedRecipe.source === "web") {
       const sourced = await resolveRecipe?.(proposedRecipe.title);
       if (!sourced) {
-        blockers.push({ code: "recipe_unresolved", message: `${proposedRecipe.title} could not be resolved from a real recipe source.` });
+        blockers.push({ code: "recipe_unresolved", message: `Не вдалося підтвердити рецепт «${proposedRecipe.title}» із надійного джерела.` });
         continue;
       }
       const productIds = new Map(proposedRecipe.ingredients.map((ingredient) => [ingredient.name.trim().toLocaleLowerCase(), ingredient.productId]));
       const purchasableIngredients = sourced.ingredients.filter((ingredient) => !isPantryStaple(ingredient.name));
       if (purchasableIngredients.some((ingredient) => !productIds.has(ingredient.name.trim().toLocaleLowerCase()))) {
-        blockers.push({ code: "recipe_ingredient_mapping_missing", message: `${sourced.title} does not map every sourced ingredient to a Silpo product.` });
+        blockers.push({ code: "recipe_ingredient_mapping_missing", message: `Не для кожного інгредієнта рецепта «${sourced.title}» знайдено товар Silpo.` });
         continue;
       }
       recipe = {
@@ -264,7 +264,7 @@ export async function validateProposal({
     const assignedIds = [...new Set(recipe.assignedMemberIds)];
     const unknownIds = assignedIds.filter((id) => !members.has(id));
     if (unknownIds.length) {
-      blockers.push({ code: "invalid_assignment", message: `${recipe.title} is assigned to unknown party members.` });
+      blockers.push({ code: "invalid_assignment", message: `Рецепт «${recipe.title}» призначено невідомим учасникам.` });
       continue;
     }
     let fullyResolved = true;
@@ -275,17 +275,17 @@ export async function validateProposal({
     for (const ingredient of recipe.ingredients) {
       const product = await hydrate(ingredient.productId);
       if (!product) {
-        blockers.push({ code: "product_not_found", message: `Silpo product ${ingredient.productId} for ${ingredient.name} was not found.`, productId: ingredient.productId });
+        blockers.push({ code: "product_not_found", message: `Товар Silpo ${ingredient.productId} для «${ingredient.name}» не знайдено.`, productId: ingredient.productId });
         fullyResolved = false;
         continue;
       }
       if (!product.available) {
-        blockers.push({ code: "product_unavailable", message: `${product.name} for ${ingredient.name} is unavailable.`, productId: product.id });
+        blockers.push({ code: "product_unavailable", message: `Товар «${product.name}» для «${ingredient.name}» недоступний.`, productId: product.id });
         fullyResolved = false;
         continue;
       }
       if (product.packageSize.unit !== ingredient.unit) {
-        blockers.push({ code: "recipe_unit_mismatch", message: `${ingredient.name} requires ${ingredient.unit}, but ${product.name} is sold in ${product.packageSize.unit}.`, productId: product.id });
+        blockers.push({ code: "recipe_unit_mismatch", message: `Для «${ingredient.name}» потрібна одиниця ${ingredient.unit}, але «${product.name}» продається в ${product.packageSize.unit}.`, productId: product.id });
         fullyResolved = false;
         continue;
       }
@@ -302,10 +302,10 @@ export async function validateProposal({
         const restrictions = [...new Set([...partyWideRestrictions, ...(member.restrictions ?? [])])];
         const results = restrictions.map((restriction) => restrictionSafety(evidenceProduct, restriction));
         if (results.includes("unsafe")) {
-          blockers.push({ code: "restriction_violation", message: `${recipe.title} ingredient ${ingredient.name} is unsafe for ${member.name ?? member.id}.`, productId: product.id, memberId });
+          blockers.push({ code: "restriction_violation", message: `Інгредієнт «${ingredient.name}» у рецепті «${recipe.title}» не підходить для ${member.name ?? member.id}.`, productId: product.id, memberId });
           safeIds.delete(memberId);
         } else if (results.includes("unknown")) {
-          blockers.push({ code: "restriction_unverified", message: `${recipe.title} ingredient ${ingredient.name} cannot be verified for ${member.name ?? member.id}.`, productId: product.id, memberId });
+          blockers.push({ code: "restriction_unverified", message: `Не вдалося перевірити інгредієнт «${ingredient.name}» у рецепті «${recipe.title}» для ${member.name ?? member.id}.`, productId: product.id, memberId });
           safeIds.delete(memberId);
         }
       }
@@ -317,7 +317,7 @@ export async function validateProposal({
         lookupProductId: ingredient.productId,
         quantity: purchaseQuantity,
         assignedMemberIds: assignedIds,
-        reason: `Ingredient for ${recipe.title}.`,
+        reason: `Інгредієнт для рецепта «${recipe.title}».`,
         lineTotalUah: productLineTotalUah(product, purchaseQuantity),
       };
       selectedProducts.push(selectedProduct);
@@ -355,7 +355,7 @@ export async function validateProposal({
   const knownWishKeys = new Set(input.currentParty.members.flatMap((member) => (member.wishes ?? []).map((wish) => `${member.id}:${wish.id}`)));
   if (proposedFulfillments.size !== (proposal.wishFulfillments ?? []).length
     || [...proposedFulfillments.keys()].some((key) => !knownWishKeys.has(key))) {
-    blockers.push({ code: "invalid_fulfillment", message: "Wish fulfillment references must be unique and belong to current party wishes." });
+    blockers.push({ code: "invalid_fulfillment", message: "Посилання на виконання побажань мають бути унікальними й належати поточній вечірці." });
   }
   const wishFulfillments: WishFulfillment[] = [];
   for (const member of input.currentParty.members) {
@@ -369,12 +369,12 @@ export async function validateProposal({
         && restrictions.every((restriction) => restrictionSafety(product, restriction) === "safe"));
 
       if (requestedStrategy === "ready_made" && !safeCandidates.length) {
-        blockers.push({ code: "no_suitable_ready_made", message: `No suitable ready-made Silpo product was found for ${wish.text}.`, memberId: member.id });
+        blockers.push({ code: "no_suitable_ready_made", message: `Для побажання «${wish.text}» не знайдено відповідного готового товару Silpo.`, memberId: member.id });
         continue;
       }
 
       if (!proposed) {
-        blockers.push({ code: "wish_unfulfilled", message: `${wish.text} is not fulfilled for ${member.name ?? member.id}.`, memberId: member.id });
+        blockers.push({ code: "wish_unfulfilled", message: `Побажання «${wish.text}» не виконано для ${member.name ?? member.id}.`, memberId: member.id });
         continue;
       }
 
@@ -383,7 +383,7 @@ export async function validateProposal({
       const fallbackReason = proposed.fallbackReason ?? null;
 
       if (proposed.memberId !== member.id || proposed.wishId !== wish.id || proposed.resolvedStrategy === "recipe" && requestedStrategy === "ready_made") {
-        blockers.push({ code: "invalid_fulfillment", message: `${wish.text} uses an invalid fulfillment strategy.`, memberId: member.id });
+        blockers.push({ code: "invalid_fulfillment", message: `Для побажання «${wish.text}» вибрано некоректний спосіб виконання.`, memberId: member.id });
         continue;
       }
 
@@ -393,7 +393,7 @@ export async function validateProposal({
           const selection = verifiedSelections.get(id);
           return candidateIds.has(id) && selection?.assignedMemberIds.includes(member.id);
         });
-        if (!valid) blockers.push({ code: "invalid_fulfillment", message: `${wish.text} must use hydrated candidates assigned to ${member.name ?? member.id}.`, memberId: member.id });
+        if (!valid) blockers.push({ code: "invalid_fulfillment", message: `Для побажання «${wish.text}» слід використати перевірені товари, призначені для ${member.name ?? member.id}.`, memberId: member.id });
       } else {
         const matchingRecipe = recipes.find((recipe) => recipe.title === recipeTitle && recipe.assignedMemberIds.includes(member.id));
         const fallbackIsValid = requestedStrategy === "recipe"
@@ -402,7 +402,7 @@ export async function validateProposal({
             || fallbackReason === "no_candidates" && candidates.length === 0
             || fallbackReason === "no_safe_candidate" && candidates.length > 0 && safeCandidates.length === 0;
         if (!matchingRecipe || selectedProductIds.length || !fallbackIsValid) {
-          blockers.push({ code: "invalid_fulfillment", message: `${wish.text} has an invalid recipe fallback.`, memberId: member.id });
+          blockers.push({ code: "invalid_fulfillment", message: `Для побажання «${wish.text}» вибрано некоректну заміну рецептом.`, memberId: member.id });
         }
       }
 
@@ -421,26 +421,26 @@ export async function validateProposal({
 
   for (const member of input.currentParty.members) {
     if (coverage[member.id].foodGrams < effectiveTargets.foodGramsPerPerson) {
-      blockers.push({ code: "insufficient_food", message: `${member.name ?? member.id} does not have enough verified food.`, memberId: member.id });
+      blockers.push({ code: "insufficient_food", message: `Для ${member.name ?? member.id} недостатньо перевіреної їжі.`, memberId: member.id });
     }
     if (coverage[member.id].drinkMilliliters < effectiveTargets.drinkMillilitersPerPerson) {
-      blockers.push({ code: "insufficient_drink", message: `${member.name ?? member.id} does not have enough verified drinks.`, memberId: member.id });
+      blockers.push({ code: "insufficient_drink", message: `Для ${member.name ?? member.id} недостатньо перевірених напоїв.`, memberId: member.id });
     }
   }
 
   if (!proposal.selections.length && !(proposal.recipes?.length)) {
-    blockers.push({ code: "no_suitable_products", message: "Silpo search returned no suitable products." });
+    blockers.push({ code: "no_suitable_products", message: "Пошук Silpo не знайшов відповідних товарів." });
   }
 
   const totalUah = Math.round(selectedProducts.reduce((sum, product) => sum + product.lineTotalUah, 0) * 100) / 100;
   const warnings: Warning[] = [];
   if (budgetUah !== null && totalUah > budgetUah) {
     const amountUah = Math.round((totalUah - budgetUah) * 100) / 100;
-    warnings.push({ code: "budget_exceeded", message: `The plan exceeds the budget by ${amountUah} UAH.`, amountUah });
+    warnings.push({ code: "budget_exceeded", message: `План перевищує бюджет на ${amountUah} грн.`, amountUah });
   }
   const readiness = blockers.length ? "invalid" as const : "ready" as const;
   const draft: PartyPlanDraft = {
-    summary: `Party plan for ${input.currentParty.members.length} participants with ${selectedProducts.length} verified Silpo products.`,
+    summary: `План вечірки для ${input.currentParty.members.length} учасників із ${selectedProducts.length} перевіреними товарами Silpo.`,
     products: selectedProducts,
     recipes,
     totalUah,

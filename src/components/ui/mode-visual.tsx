@@ -5,7 +5,7 @@ import { BasketIcon, PotIcon, SparkleIcon } from "./icons";
 export const MODE_VISUAL: Record<ModeAccent, { icon: typeof BasketIcon; solid: string; soft: string; dot: string }> = {
   tomato: {
     icon: BasketIcon,
-    solid: "bg-tomato text-white",
+    solid: "bg-tomato text-ink",
     soft: "bg-tomato/10 text-tomato-ink border-tomato/25",
     dot: "bg-tomato",
   },

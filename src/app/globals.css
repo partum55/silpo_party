@@ -18,6 +18,10 @@
   --stone-600: #8c8375;
   --danger: #cc3d2e;
   --danger-soft: #fbe4df;
+  --scrollbar-track: #f3f5ed;
+  --scrollbar-thumb: #8c8375;
+  --scrollbar-thumb-hover: #6f675c;
+  --scrollbar-thumb-active: #55493f;
 
   --radius-lg: 1.1rem;
   --radius-md: 0.7rem;
@@ -48,6 +52,7 @@
 
 html {
   background: var(--paper);
+  scrollbar-gutter: stable;
 }
 
 body {
@@ -58,6 +63,18 @@ body {
 
 * {
   border-color: var(--stone);
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+*::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border: 3px solid var(--scrollbar-track); border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+*::-webkit-scrollbar-thumb:active { background: var(--scrollbar-thumb-active); }
+
+@media (forced-colors: active) {
+  * { scrollbar-color: auto; }
 }
 
 :focus-visible {

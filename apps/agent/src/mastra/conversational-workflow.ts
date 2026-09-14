@@ -153,17 +153,17 @@ async function recoverLookups(plan: PartyPlanDraft | null, silpo: Gateway) {
 function errorResult(input: Input, intent: z.infer<typeof conversationDecisionSchema>["intent"], code: "actor_not_found" | "plan_edit_forbidden" | "scope_mismatch" | "preferences_locked") {
   const needsReopen = code === "preferences_locked";
   return {
-    responseText: needsReopen ? "Use “Змінити побажання” before editing preferences." : "This message cannot change the requested state.",
+    responseText: needsReopen ? "Спочатку натисніть «Змінити побажання»." : "Це повідомлення не може змінити вибраний стан.",
     intent,
     preferenceOperations: [],
     planOperations: [],
     updatedPreferences: preferencesFromParty(input.currentParty),
     updatedPlan: input.currentPlan,
-    blockers: [{ code, message: needsReopen ? "Participant preferences are finalized." : "The actor or command scope does not authorize this change." }],
+    blockers: [{ code, message: needsReopen ? "Побажання учасника вже зафіксовані." : "Учасник або область команди не дозволяє цю зміну." }],
     warnings: input.warnings,
     questions: needsReopen
-      ? [{ code: "preference_reopen_required" as const, prompt: "Do you want to reopen this participant's preferences?", memberId: input.actorId }]
-      : [{ code: "command_scope_required" as const, prompt: "Choose whether this message edits preferences or the shared plan." }],
+      ? [{ code: "preference_reopen_required" as const, prompt: "Відкрити побажання цього учасника для редагування?", memberId: input.actorId }]
+      : [{ code: "command_scope_required" as const, prompt: "Уточніть, це повідомлення змінює побажання чи спільний план." }],
     readiness: "needs_input" as const,
   };
 }
@@ -236,7 +236,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
     if (!decision) {
       // The model's JSON didn't satisfy conversationDecisionSchema's validation (structuredOutput throws in
       // that case rather than returning an object) — fail soft instead of crashing the whole turn.
-      return readOnlyResult(inputData, "Sorry, I couldn't understand that message. Could you rephrase it?");
+      return readOnlyResult(inputData, "Не вдалося зрозуміти повідомлення. Спробуйте сформулювати його інакше.");
     }
     const applied = applyConversationDecision({
       party: inputData.currentParty,
@@ -249,7 +249,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
 
     if (decision.intent === "read_only") {
       const answer = await partyPlannerAgent.generate(
-        `Answer the user's read-only question using only this frozen state. Do not call tools, propose changes, or invent facts.\n${JSON.stringify({ message: inputData.message, currentParty: inputData.currentParty, currentPlan: inputData.currentPlan })}`,
+        `Відповідай українською мовою на запитання користувача, використовуючи лише цей зафіксований стан. Не викликай інструменти, не пропонуй змін і не вигадуй фактів.\n${JSON.stringify({ message: inputData.message, currentParty: inputData.currentParty, currentPlan: inputData.currentPlan })}`,
         { requestContext, abortSignal: AbortSignal.timeout(20_000) },
       );
       return readOnlyResult(inputData, answer.text);
@@ -293,7 +293,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
       });
       state.currentPlan = recovered.plan;
       state.wishCandidates = wishCandidates;
-      state.blockers = recovered.unresolvedIds.map((productId) => ({ code: "product_not_found", message: `Existing product ${productId} could not be resolved in Silpo.`, productId }));
+      state.blockers = recovered.unresolvedIds.map((productId) => ({ code: "product_not_found", message: `Не вдалося знайти наявний товар ${productId} у Silpo.`, productId }));
 
       const result = await runPlanningLoop(state, {
         plan: async ({ previousBlockers }) => {
@@ -344,10 +344,12 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
         ],
       });
 
-      const warningText = result.warnings.map((warning) => warning.message).join(" ");
+      const warningText = result.warnings.map((warning) => warning.code === "budget_exceeded"
+        ? `План перевищує бюджет на ${warning.amountUah ?? 0} грн.`
+        : "Кількість людей у запиті не збігається зі складом вечірки; використано поточний список учасників.").join(" ");
       return {
         responseText: [
-          result.readiness === "ready" ? "Party plan updated." : "I updated the draft, but some items still need attention.",
+          result.readiness === "ready" ? "План вечірки оновлено." : "Чернетку оновлено, але деякі товари потребують уваги.",
           warningText,
         ].filter(Boolean).join(" "),
         intent: decision.intent,
@@ -364,7 +366,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
       };
     } catch (error) {
       console.error("conversationalTurn: plan mutation failed", error);
-      return readOnlyResult(inputData, "Sorry, something went wrong while updating the cart. Please try again.");
+      return readOnlyResult(inputData, "Не вдалося оновити кошик. Спробуйте ще раз.");
     }
   },
 });

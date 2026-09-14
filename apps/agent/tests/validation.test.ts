@@ -145,8 +145,8 @@ test("hydrates product facts and calculates a soft-budget warning", async () => 
   assert.equal(result.totalUah, 230);
   assert.deepEqual(result.warnings.find((warning) => warning.code === "budget_exceeded")?.amountUah, 130);
   assert.equal(result.selectedProducts[0].name, "Vegetable platter 800 g");
-  assert.equal(result.draft.summary, "Party plan for 2 participants with 2 verified Silpo products.");
-  assert.equal(result.selectedProducts[0].reason, "Assigned to 2 participants.");
+  assert.equal(result.draft.summary, "План вечірки для 2 учасників із 2 перевіреними товарами Silpo.");
+  assert.equal(result.selectedProducts[0].reason, "Призначено для 2 учасників.");
 });
 
 test("rejects a plausible fabricated product id", async () => {

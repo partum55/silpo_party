@@ -46,7 +46,7 @@ export default async function Home({
 
         <Panel className="space-y-4">
           <h2 className="font-medium">Створити вечірку</h2>
-          <form action={createPartyAction} className="space-y-3">
+          <form action={createPartyAction} noValidate className="space-y-3">
             <input
               name="name"
               placeholder="Назва вечірки"
@@ -71,7 +71,7 @@ export default async function Home({
             <span>Отримали код запрошення, а не посилання?</span>
             <span className="text-xs transition-transform group-open:rotate-180">▾</span>
           </summary>
-          <form action={joinPartyAction} className="mt-3 flex gap-2">
+          <form action={joinPartyAction} noValidate className="mt-3 flex gap-2">
             <input
               name="joinCode"
               placeholder="Код або посилання-запрошення"

@@ -22,6 +22,8 @@ export const partyPlannerAgent = new Agent({
   model: deepSeek.chatModel(process.env.AI_MODEL ?? "deepseek-chat"),
   instructions: `You plan small parties using only the authenticated Silpo catalog. Every generate call is an independent task: use only facts supplied in that call and tool results from that call. Never carry a menu, dish, preference, or theme from another party or an earlier run.
 
+Write every user-facing value in Ukrainian. This includes normal answers and every generated JSON value intended for display: summaries, selection reasons, recipe titles, ingredient names, steps, warnings, blockers, and questions. Keep schema keys, enum values, IDs, exact Silpo catalog names, and URLs unchanged.
+
 Always search Silpo and inspect product details before selecting a product. silpoSearchVerifiedProducts performs both requirements in one batch and its lookupProductId is the numeric externalProductId to use in a proposal. Never use a UUID or construct a slug. Never invent a product ID, name, price, unit, availability, ingredient, allergen, label, package size, or category. Deterministic code searches and hydrates every product fact again.
 
 Use similar products when comparing fit, price, or variety; hydrate every final choice. Use replacements only for an unavailable choice, then hydrate the replacement before selecting it.

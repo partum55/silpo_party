@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+"use client";
+
+import { useRef, useState, type ReactNode } from "react";
 
 import { formatPurchaseUk } from "@/lib/format";
 import { AvatarStack } from "@/components/ui/avatar";
@@ -6,8 +8,9 @@ import { Money } from "@/components/ui/money";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { TornPanel } from "@/components/ui/panel";
 import { buttonClasses } from "@/components/ui/button-classes";
-import { ChevronDownIcon } from "@/components/ui/icons";
 import { InviteLink } from "@/components/ui/invite-link";
+import { Button } from "@/components/ui/button";
+import { ChevronDownIcon, MinusIcon, PlusIcon, TrashIcon } from "@/components/ui/icons";
 
 import type { Cart, CartItem, Member, PartyStatus, Recipe } from "./types";
 
@@ -21,17 +24,143 @@ function assignees(item: CartItem | Recipe, members: Member[], currentUserId: st
   return named.length ? <AvatarStack members={named} max={3} /> : null;
 }
 
-function ItemRow({ item, members, currentUserId }: { item: CartItem; members: Member[]; currentUserId: string }) {
+function ItemRow({
+  item,
+  members,
+  currentUserId,
+  partyId,
+  canEdit,
+  onCartUpdated,
+}: {
+  item: CartItem;
+  members: Member[];
+  currentUserId: string;
+  partyId: string;
+  canEdit: boolean;
+  onCartUpdated: (cart: Cart) => void;
+}) {
+  const [value, setValue] = useState(String(item.quantity));
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const skipNextBlur = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const prepareButtonClick = () => {
+    if (document.activeElement === inputRef.current) skipNextBlur.current = true;
+  };
+
+  async function mutate(quantity: number | null) {
+    if (pending || !canEdit) return;
+    if (quantity !== null && (!Number.isSafeInteger(quantity) || quantity < 1)) {
+      setValue(String(item.quantity));
+      setError("Кількість має бути цілим числом від 1.");
+      return;
+    }
+    if (quantity === item.quantity) {
+      setValue(String(item.quantity));
+      return;
+    }
+
+    setPending(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/parties/${partyId}/cart`, {
+        method: quantity === null ? "DELETE" : "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: item.id, ...(quantity === null ? {} : { quantity }) }),
+      });
+      if (!response.ok) throw new Error();
+      onCartUpdated(await response.json() as Cart);
+    } catch {
+      setValue(String(item.quantity));
+      setError("Не вдалося змінити товар. Спробуйте ще раз.");
+    } finally {
+      setPending(false);
+    }
+  }
+
   return (
-    <li className="flex items-center justify-between gap-3 py-2">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium">{item.name}</p>
-        <p className="truncate text-xs text-ink-soft">{formatPurchaseUk(item.package_size, item.quantity)}</p>
+    <li className="py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{item.name}</p>
+          <p className="truncate text-xs text-ink-soft">{formatPurchaseUk(item.package_size, item.quantity)}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2.5">
+          {assignees(item, members, currentUserId)}
+          <Money amount={item.line_total_uah} className="text-sm" />
+        </div>
       </div>
-      <div className="flex shrink-0 items-center gap-2.5">
-        {assignees(item, members, currentUserId)}
-        <Money amount={item.line_total_uah} className="text-sm" />
-      </div>
+      {canEdit && (
+        <div className="mt-2 flex items-center gap-1.5" aria-busy={pending}>
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            disabled={pending || Number(value) <= 1}
+            onPointerDown={prepareButtonClick}
+            onClick={() => void mutate((Number(value) || item.quantity) - 1)}
+            aria-label={`Зменшити кількість: ${item.name}`}
+            title="Зменшити кількість"
+          >
+            <MinusIcon className="h-4 w-4" />
+          </Button>
+          <label className="sr-only" htmlFor={`quantity-${item.id}`}>Кількість: {item.name}</label>
+          <input
+            id={`quantity-${item.id}`}
+            ref={inputRef}
+            type="number"
+            inputMode="numeric"
+            min="1"
+            step="1"
+            value={value}
+            disabled={pending}
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? `quantity-error-${item.id}` : undefined}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (next === "" || (/^\d+$/.test(next) && Number(next) >= 1)) setValue(next);
+            }}
+            onBlur={() => {
+              if (skipNextBlur.current) {
+                skipNextBlur.current = false;
+                return;
+              }
+              void mutate(Number(value));
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+            }}
+            className="h-10 w-16 rounded-[var(--radius-md)] border border-stone bg-paper px-2 text-center font-numeral text-sm disabled:opacity-50"
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            disabled={pending}
+            onPointerDown={prepareButtonClick}
+            onClick={() => void mutate((Number(value) || item.quantity) + 1)}
+            aria-label={`Збільшити кількість: ${item.name}`}
+            title="Збільшити кількість"
+          >
+            <PlusIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            disabled={pending}
+            onPointerDown={prepareButtonClick}
+            onClick={() => void mutate(null)}
+            className="ml-auto text-danger hover:bg-danger-soft hover:text-danger"
+            aria-label={pending ? "Зберігаємо зміни" : `Видалити товар: ${item.name}`}
+            title={pending ? "Зберігаємо зміни" : "Видалити товар"}
+          >
+            {pending ? <span aria-hidden>…</span> : <TrashIcon className="h-4 w-4" />}
+          </Button>
+          {pending && <span className="sr-only" aria-live="polite">Зберігаємо…</span>}
+        </div>
+      )}
+      {error && <p id={`quantity-error-${item.id}`} className="mt-1.5 text-xs text-danger" role="alert">{error}</p>}
     </li>
   );
 }
@@ -82,6 +211,8 @@ export function PlanPanel({
   isCreator,
   budgetForm,
   actions,
+  partyId,
+  onCartUpdated,
 }: {
   party: PartyStatus;
   cart: Cart;
@@ -90,6 +221,8 @@ export function PlanPanel({
   isCreator: boolean;
   budgetForm: ReactNode;
   actions?: ReactNode;
+  partyId: string;
+  onCartUpdated: (cart: Cart) => void;
 }) {
   const total = cart.total_uah ?? 0;
   const budget = party.budget_uah;
@@ -119,7 +252,15 @@ export function PlanPanel({
         ) : (
           <ul className="divide-y divide-stone-soft rounded-[var(--radius-md)] border border-stone bg-paper-raised px-3">
             {cart.items.map((item) => (
-              <ItemRow key={item.id} item={item} members={members} currentUserId={currentUserId} />
+              <ItemRow
+                key={`${item.id}:${item.quantity}`}
+                item={item}
+                members={members}
+                currentUserId={currentUserId}
+                partyId={partyId}
+                canEdit={party.status === "ACTIVE"}
+                onCartUpdated={onCartUpdated}
+              />
             ))}
           </ul>
         )}

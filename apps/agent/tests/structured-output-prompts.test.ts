@@ -32,3 +32,12 @@ test("every structuredOutput prompt mentions 'json'", () => {
   }
   assert.equal(total, 4, "expected 4 structuredOutput call sites across these files; update this count if you add/remove one");
 });
+
+test("the agent contract and deterministic replies require Ukrainian", () => {
+  const agent = readFileSync(path.join(dir, "..", "src/mastra/party-planner-agent.ts"), "utf8");
+  const conversation = readFileSync(path.join(dir, "..", "src/mastra/conversational-workflow.ts"), "utf8");
+
+  assert.match(agent, /every user-facing value in Ukrainian/i);
+  assert.match(conversation, /План вечірки оновлено/);
+  assert.doesNotMatch(conversation, /Party plan updated|Sorry,|I updated the draft/);
+});
