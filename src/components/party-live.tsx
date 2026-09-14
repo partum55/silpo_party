@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { deletePartyAction, finalizeCartAction, leavePartyAction, updatePartyBudgetAction } from "@/app/(authenticated)/parties/actions";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { MODE_COPY } from "@/lib/party/mode-copy";
+import { AGENT_THINKING_COPY, type AgentStatus } from "@/lib/party/agent-status-copy";
 
 import { ChatMessages } from "@/components/party/chat-panel";
 import { MembersPanel } from "@/components/party/members-panel";
@@ -54,6 +55,7 @@ export function PartyLive({
   const [tab, setTab] = useState<"chat" | "plan">("chat");
   const listRef = useRef<HTMLDivElement>(null);
   const lastAgentStatusRef = useRef(initialParty.agent_status);
+  const thinkingLabel = AGENT_THINKING_COPY[party.agent_status as AgentStatus];
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -158,7 +160,7 @@ export function PartyLive({
 
   useEffect(() => {
     listRef.current?.scrollIntoView({ block: "end" });
-  }, [messages, tab]);
+  }, [messages, tab, thinkingLabel]);
 
   async function send(event: React.FormEvent) {
     event.preventDefault();
@@ -188,7 +190,6 @@ export function PartyLive({
   }
 
   const isActive = party.status === "ACTIVE";
-  const isThinking = party.agent_status === "THINKING" || party.agent_status === "SEARCHING" || party.agent_status === "UPDATING_CART";
   const memberByUserId = new Map(members.map((member) => [member.user_id, member]));
 
   return (
@@ -202,12 +203,6 @@ export function PartyLive({
           <ModeBadge mode={party.mode} />
         </div>
         <MembersPanel members={members} currentUserId={currentUserId} />
-        {isThinking && (
-          <p className="flex items-center gap-1.5 text-xs text-ink-soft">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-plum" />
-            Агент думає…
-          </p>
-        )}
         {party.agent_status === "ERROR" && party.agent_error && (
           <InlineAlert tone="error">{party.agent_error}</InlineAlert>
         )}
@@ -216,7 +211,7 @@ export function PartyLive({
 
       <div className="flex-1 overflow-y-auto">
         <div hidden={tab !== "chat"}>
-          <ChatMessages messages={messages} currentUserId={currentUserId} memberNames={memberByUserId} listRef={listRef} />
+          <ChatMessages messages={messages} currentUserId={currentUserId} memberNames={memberByUserId} listRef={listRef} thinkingLabel={thinkingLabel} />
         </div>
         <div hidden={tab !== "plan"}>
           <PlanPanel

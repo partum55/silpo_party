@@ -10,18 +10,38 @@ function bubbleClass(mine: boolean, senderType: ChatMessage["sender_type"]) {
   return "bg-paper-raised border border-stone text-ink";
 }
 
+function ThinkingBubble({ label }: { label: string }) {
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[80%] rounded-[var(--radius-md)] border border-plum/20 bg-plum/10 px-3.5 py-2 text-sm text-ink">
+        <p className="flex items-center gap-1.5">
+          <SparkleIcon className="h-3.5 w-3.5 shrink-0 animate-pulse" />
+          <span>{label}</span>
+          <span className="flex items-center gap-1">
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-plum [animation-delay:-0.3s]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-plum [animation-delay:-0.15s]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-plum" />
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function ChatMessages({
   messages,
   currentUserId,
   memberNames,
   listRef,
+  thinkingLabel,
 }: {
   messages: ChatMessage[];
   currentUserId: string;
   memberNames: Map<string, Member>;
   listRef: RefObject<HTMLDivElement | null>;
+  thinkingLabel: string | undefined;
 }) {
-  if (messages.length === 0) {
+  if (messages.length === 0 && !thinkingLabel) {
     return (
       <p className="px-5 py-8 text-center text-sm text-ink-soft">
         Напишіть перше повідомлення — розкажіть агенту, чого хочете.
@@ -59,6 +79,7 @@ export function ChatMessages({
           </div>
         );
       })}
+      {thinkingLabel && <ThinkingBubble label={thinkingLabel} />}
     </div>
   );
 }
