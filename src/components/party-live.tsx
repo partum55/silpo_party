@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { deletePartyAction, finalizeCartAction, leavePartyAction, updatePartyBudgetAction } from "@/app/(authenticated)/parties/actions";
+import { formatAmount, formatPurchase, type PackageSize } from "@/lib/cart/display";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type ChatMessage = {
@@ -15,14 +16,36 @@ type ChatMessage = {
 
 type Member = { user_id: string; role: "CREATOR" | "MEMBER"; joined_at: string };
 
-type CartItem = { id: string; name: string; quantity: number; price_uah: number | null };
+type CartItem = {
+  id: string;
+  name: string;
+  quantity: number;
+  price_uah: number | null;
+  package_size: PackageSize | null;
+  line_total_uah: number;
+};
+
+type RecipeIngredient = {
+  name: string;
+  requiredAmount: number;
+  unit: PackageSize["unit"];
+  purchaseQuantity: number;
+  purchasedAmount: number;
+  selectedProduct: { name: string; packageSize: PackageSize };
+};
 
 type Cart = {
   status: "DRAFT" | "FINALIZED";
   total_uah: number | null;
   checkout_url: string | null;
   items: CartItem[];
-  recipes: Array<{ title: string; sourceUrl: string | null; steps: string[]; assignedMemberIds: string[] }>;
+  recipes: Array<{
+    title: string;
+    sourceUrl: string | null;
+    steps: string[];
+    assignedMemberIds: string[];
+    ingredients: RecipeIngredient[];
+  }>;
   memberTotals: Array<{ memberId: string; amountUah: number }>;
 };
 
@@ -297,7 +320,7 @@ export function PartyLive({
           {cart.items.length === 0 && <li className="text-zinc-500">Кошик порожній.</li>}
           {cart.items.map((item) => (
             <li key={item.id}>
-              {item.name} × {item.quantity} — {item.price_uah ?? "?"} грн
+              {item.name} — {formatPurchase(item.package_size, item.quantity)} — {item.line_total_uah.toFixed(2)} грн
             </li>
           ))}
         </ul>
@@ -316,6 +339,15 @@ export function PartyLive({
               <details key={recipe.title} className="rounded border p-2">
                 <summary className="cursor-pointer font-medium">{recipe.title}</summary>
                 {recipe.sourceUrl && <a href={recipe.sourceUrl} target="_blank" rel="noopener noreferrer" className="underline">Джерело рецепта</a>}
+                <p className="mt-2 font-medium">Ingredients:</p>
+                <ul className="list-disc space-y-1 pl-5">
+                  {recipe.ingredients.map((ingredient, index) => (
+                    <li key={`${recipe.title}-ingredient-${index}`}>
+                      {ingredient.name}: need {formatAmount(ingredient.requiredAmount, ingredient.unit)}; buy {ingredient.selectedProduct.name} — {formatPurchase(ingredient.selectedProduct.packageSize, ingredient.purchaseQuantity)}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 font-medium">Steps:</p>
                 <ol className="list-decimal space-y-1 pl-5">
                   {recipe.steps.map((step, index) => <li key={`${recipe.title}-${index}`}>{step}</li>)}
                 </ol>

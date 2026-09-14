@@ -5,6 +5,7 @@ import type {
   PlannerProposal,
   Warning,
 } from "./schemas.ts";
+import { productLineTotalUah } from "./purchasing.ts";
 
 export const coverageTargets = {
   foodGramsPerPerson: 400,
@@ -228,7 +229,7 @@ export async function validateProposal({
       quantity: selection.quantity,
       assignedMemberIds: assignedIds,
       reason: `Assigned to ${assignedIds.length} participant${assignedIds.length === 1 ? "" : "s"}.`,
-      lineTotalUah: Math.round(product.priceUah * selection.quantity * 100) / 100,
+      lineTotalUah: productLineTotalUah(product, selection.quantity),
     };
     selectedProducts.push(verified);
     verifiedSelections.set(selection.productId, verified);
@@ -317,7 +318,7 @@ export async function validateProposal({
         quantity: purchaseQuantity,
         assignedMemberIds: assignedIds,
         reason: `Ingredient for ${recipe.title}.`,
-        lineTotalUah: Math.round(product.priceUah * purchaseQuantity * 100) / 100,
+        lineTotalUah: productLineTotalUah(product, purchaseQuantity),
       };
       selectedProducts.push(selectedProduct);
       ingredients.push({

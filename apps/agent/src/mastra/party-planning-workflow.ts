@@ -40,6 +40,7 @@ export const productSchema = z.object({
     labels: z.array(z.string()),
     composition: z.array(z.string()).optional(),
   }),
+  // Kept permissive for legacy persisted plans; every newly generated planner selection is integer-validated.
   quantity: z.number().positive(),
   assignedMemberIds: z.array(z.string()),
   reason: z.string(),
@@ -222,13 +223,13 @@ const planAndValidate = createStep({
 Current party and request:
 ${JSON.stringify({ mode: state.mode, request: state.request, members: state.currentParty.members, participantCount: state.currentParty.members.length, budgetUah: state.budgetUah, partyWideRestrictions: state.restrictions, coverageTargets, wishCandidates: state.wishCandidates })}
 
-Mode rules: SHOPPING means direct requested products assigned only to their requester and no recipes. DINNER means requested dishes become recipes and pantry staples (salt, pepper, water, cooking oil) are omitted. EVENT means autonomously cover the full event cycle and assign shared purchases to all participants.
+Mode rules: SHOPPING means direct requested products assigned only to their requester and no recipes. DINNER means requested dishes become recipes and pantry staples (salt, pepper, water, cooking oil) are omitted. EVENT means autonomously cover essentials first (main food, one side, drinks, and a suitable sauce), assign shared purchases to all participants, and add optional snacks or extras only when the remaining budget comfortably allows them. In every mode, prefer lower-priced suitable verified products, minimize package waste, and treat a supplied budget as a strong constraint.
 
 Member wishes are current planning preferences. Member status is UI-owned context only; never infer or change it from message text.
 
 For ready_made, choose suitable candidate products or leave the wish blocked. For either, prefer suitable ready-made candidates; use a recipe only for no_candidates, no_safe_candidate, or a genuine poor_match. For recipe, skip ready-made fulfillment and use explicit_cooking. Recipe resolution is a fallback strategy, not the default for named dishes. These rules apply generally; never special-case a dish.
 
-Coverage uses hydrated package amount × quantity, divided among every assigned member. Meet both targets for each member; on repair, replace unverified products and increase quantities where coverage is short.
+Quantity is always a positive integer count of the product's displayed purchasable increment/package, never kilograms or a raw recipe amount. For example, if Silpo sells tomatoes in 100 g increments and 250 g is needed, select quantity 3. Coverage uses hydrated package amount × quantity, divided among every assigned member. Meet both targets for each member; on repair, replace unverified products and increase quantities where coverage is short.
 
 Deterministic validation failures from the previous attempt:
 ${JSON.stringify(previousBlockers)}`,

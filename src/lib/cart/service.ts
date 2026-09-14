@@ -1,6 +1,12 @@
 import "server-only";
 
-import { createSilpoGateway, extractCheckoutUrl, type CartLineItem } from "@silpo-party/agent/gateway";
+import {
+  createSilpoGateway,
+  extractCheckoutUrl,
+  productLineTotalUah,
+  silpoCartQuantity,
+  type CartLineItem,
+} from "@silpo-party/agent/gateway";
 
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { assertOk, checkFinalize, checkRead } from "@/lib/party/rules";
@@ -14,6 +20,9 @@ type PlanProduct = {
   companyId?: string;
   name: string;
   priceUah: number;
+  unit: string;
+  weighted?: boolean;
+  packageSize: { amount: number; unit: "g" | "ml" | "piece" };
   quantity: number;
   assignedMemberIds: string[];
   lineTotalUah?: number;
@@ -22,19 +31,62 @@ type PlanProduct = {
 type PlanDraft = {
   products: PlanProduct[];
   totalUah: number;
-  recipes?: Array<{ title: string; sourceUrl: string | null; steps: string[]; assignedMemberIds: string[] }>;
+  recipes?: Array<{
+    title: string;
+    sourceUrl: string | null;
+    steps: string[];
+    assignedMemberIds: string[];
+    ingredients: Array<{
+      name: string;
+      requiredAmount: number;
+      unit: "g" | "ml" | "piece";
+      purchaseQuantity: number;
+      purchasedAmount: number;
+      selectedProduct: PlanProduct;
+    }>;
+  }>;
 } | null;
+
+type ProjectionRaw = {
+  unit: string;
+  weighted: boolean;
+  packageSize: PlanProduct["packageSize"];
+  lineTotalUah: number;
+};
+
+function projectionRaw(product: PlanProduct, lineTotalUah = product.lineTotalUah ?? productLineTotalUah(product, product.quantity)): ProjectionRaw {
+  return {
+    unit: product.unit,
+    weighted: product.weighted === true,
+    packageSize: product.packageSize,
+    lineTotalUah,
+  };
+}
+
+function isProjectionRaw(value: unknown): value is ProjectionRaw {
+  if (!value || typeof value !== "object") return false;
+  const raw = value as Partial<ProjectionRaw>;
+  return typeof raw.unit === "string"
+    && typeof raw.weighted === "boolean"
+    && typeof raw.lineTotalUah === "number"
+    && Boolean(raw.packageSize)
+    && typeof raw.packageSize?.amount === "number"
+    && ["g", "ml", "piece"].includes(raw.packageSize.unit ?? "");
+}
 
 /** Replaces cart_items with the derived projection of plan.products, and stores the raw plan for continuity. */
 export async function syncCartFromPlan(db: Db, partyId: string, plan: PlanDraft) {
   const { error: deleteError } = await db.from("cart_items").delete().eq("party_id", partyId);
   if (deleteError) throw deleteError;
 
-  const grouped = new Map<string, { party_id: string; product_id: string; company_id: string; name: string; price_uah: number; quantity: number }>();
+  const grouped = new Map<string, { party_id: string; product_id: string; company_id: string; name: string; price_uah: number; quantity: number; raw: ProjectionRaw }>();
   for (const product of plan?.products ?? []) {
     const productId = product.lookupProductId ?? product.id;
     const existing = grouped.get(productId);
-    if (existing) existing.quantity += product.quantity;
+    if (existing) {
+      existing.quantity += product.quantity;
+      existing.raw.lineTotalUah = Math.round((existing.raw.lineTotalUah + (product.lineTotalUah ?? productLineTotalUah(product, product.quantity))) * 100) / 100;
+    }
     else grouped.set(productId, {
       party_id: partyId,
       product_id: productId,
@@ -42,6 +94,7 @@ export async function syncCartFromPlan(db: Db, partyId: string, plan: PlanDraft)
       name: product.name,
       price_uah: product.priceUah,
       quantity: product.quantity,
+      raw: projectionRaw(product),
     });
   }
   const items = [...grouped.values()];
@@ -76,7 +129,16 @@ export async function getCart(partyId: string, userId: string) {
   const totalUah = Number(cart?.total_uah ?? 0);
   return {
     ...cart,
-    items: items ?? [],
+    items: (items ?? []).map((item) => {
+      const raw = isProjectionRaw(item.raw) ? item.raw : null;
+      return {
+        ...item,
+        package_size: raw?.packageSize ?? null,
+        weighted: raw?.weighted ?? false,
+        sell_unit: raw?.unit ?? null,
+        line_total_uah: raw?.lineTotalUah ?? Number(item.price_uah ?? 0) * Number(item.quantity),
+      };
+    }),
     recipes: plan?.recipes ?? [],
     memberTotals: calculateMemberTotals(
       party!.mode as CostMode,
@@ -113,19 +175,34 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
 
     // Final refresh: re-hydrate every item for current price/availability; drop what's gone rather than fail.
     const droppedItems: string[] = [];
-    const refreshed: Array<{ product_id: string; company_id: string; quantity: number; price_uah: number; name: string }> = [];
+    const refreshed: Array<{
+      product_id: string;
+      company_id: string;
+      quantity: number;
+      price_uah: number;
+      name: string;
+      unit: string;
+      weighted?: boolean;
+      packageSize: PlanProduct["packageSize"];
+      lineTotalUah: number;
+    }> = [];
     for (const item of items ?? []) {
       const product = await gateway.hydrate(item.product_id);
       if (!product || !product.available || !product.companyId) {
         droppedItems.push(item.name);
         continue;
       }
+      const purchaseUnits = Number(item.quantity);
       refreshed.push({
         product_id: item.product_id,
         company_id: product.companyId,
-        quantity: item.quantity,
+        quantity: purchaseUnits,
         price_uah: product.priceUah,
         name: product.name,
+        unit: product.unit,
+        weighted: product.weighted,
+        packageSize: product.packageSize,
+        lineTotalUah: productLineTotalUah(product, purchaseUnits),
       });
     }
 
@@ -134,7 +211,7 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
       productId: item.product_id,
       companyId: item.company_id,
       branchId: context.branchId,
-      quantity: item.quantity,
+      quantity: silpoCartQuantity({ ...item, priceUah: item.price_uah }, item.quantity),
     }));
     await gateway.syncCartProducts(lineItems);
     const finalCart = await gateway.getFinalCart();
@@ -150,9 +227,19 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
         name: item.name,
         price_uah: item.price_uah,
         quantity: item.quantity,
+        raw: projectionRaw({
+          id: item.product_id,
+          name: item.name,
+          priceUah: item.price_uah,
+          unit: item.unit,
+          weighted: item.weighted,
+          packageSize: item.packageSize,
+          quantity: item.quantity,
+          assignedMemberIds: [],
+        }, item.lineTotalUah),
       })));
     }
-    const totalUah = refreshed.reduce((sum, item) => sum + item.price_uah * item.quantity, 0);
+    const totalUah = Math.round(refreshed.reduce((sum, item) => sum + item.lineTotalUah, 0) * 100) / 100;
     await db.from("carts").update({
       status: "FINALIZED",
       total_uah: totalUah,
