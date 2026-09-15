@@ -26,6 +26,7 @@ import {
   questionSchema,
   warningSchema,
   wishChangeSchema,
+  type PlannerProposal,
 } from "../domain/schemas.ts";
 import { isPantryStaple, productRestrictionSafety, type HydratedProduct, type PartyPlanDraft, type VerifiedProduct } from "../domain/validation.ts";
 import { validateModeAssignments } from "../domain/modes.ts";
@@ -85,6 +86,13 @@ const generatedDinnerRecipeSchema = z.object({
   steps: z.array(z.string().min(1)).min(1).max(12),
 }).strict();
 
+const recipeProductChoicesSchema = z.object({
+  choices: z.array(z.object({
+    key: z.string().min(1),
+    productId: z.string().min(1).nullable(),
+  }).strict()),
+}).strict();
+
 export function selectRecipeIngredientCandidate(
   ingredient: z.infer<typeof generatedDinnerRecipeSchema>["ingredients"][number],
   candidates: Array<{ lookupProductId: string; product: HydratedProduct }>,
@@ -101,6 +109,54 @@ export function selectRecipeIngredientCandidate(
     };
     return productRestrictionSafety(evidenceProduct, restrictions) === "safe";
   }) ?? null;
+}
+
+async function chooseRecipeIngredientProducts({
+  needs,
+  restrictions,
+  requestContext,
+}: {
+  needs: Array<{
+    key: string;
+    ingredient: z.infer<typeof generatedDinnerRecipeSchema>["ingredients"][number];
+    request?: string;
+    candidates: Array<{ lookupProductId: string; product: HydratedProduct }>;
+  }>;
+  restrictions: string[];
+  requestContext: RequestContext;
+}) {
+  if (!needs.length) return new Map<string, { lookupProductId: string; product: HydratedProduct }>();
+  const response = await partyPlannerAgent.generate(
+    `Return JSON with exactly one key "choices": an array containing exactly one {"key": string, "productId": string|null} for every supplied ingredient need. Select only a candidate productId listed for that same key. Understand the intended ingredient and optional replacement request semantically from the complete product name and metadata. A shared word is not enough: the product's actual food kind and culinary use must match the ingredient. Prefer a conventional supermarket form of the ingredient, and return null when none fits. Do not call tools and do not invent facts or IDs.\n${JSON.stringify({ restrictions, needs: needs.map((need) => ({
+      key: need.key,
+      ingredient: need.ingredient,
+      request: need.request,
+      candidates: need.candidates.map(({ lookupProductId, product }) => ({
+        productId: lookupProductId,
+        name: product.name,
+        packageSize: product.packageSize,
+        ingredients: product.metadata.ingredients,
+        labels: product.metadata.labels,
+      })),
+    })) })}`,
+    {
+      structuredOutput: { schema: recipeProductChoicesSchema },
+      toolChoice: "none",
+      requestContext,
+      abortSignal: AbortSignal.timeout(12_000),
+    },
+  );
+  const requested = new Map((response.object?.choices ?? []).map((choice) => [choice.key, choice.productId]));
+  return new Map(needs.flatMap((need) => {
+    const productId = requested.get(need.key);
+    const candidate = productId
+      ? need.candidates.find((item) => item.lookupProductId === productId)
+      : undefined;
+    const verified = candidate
+      ? selectRecipeIngredientCandidate(need.ingredient, [candidate], restrictions)
+      : null;
+    return verified ? [[need.key, verified] as const] : [];
+  }));
 }
 
 async function generateDinnerRecipeProposal({
@@ -142,12 +198,14 @@ async function generateDinnerRecipeProposal({
     for (let offset = 0; offset < ingredients.length; offset += 4) {
       const batch = ingredients.slice(offset, offset + 4);
       const candidates = await silpo.searchVerified(batch.map((ingredient) => ingredient.name), batch.length * 2);
-      resolved.push(...batch.map((ingredient) => {
-        const selected = selectRecipeIngredientCandidate(
-          ingredient,
-          candidates.filter((candidate) => candidate.matchedQueries.includes(ingredient.name)),
-          restrictions,
-        );
+      const needs = batch.map((ingredient, batchIndex) => ({
+        key: String(offset + batchIndex),
+        ingredient,
+        candidates: candidates.filter((candidate) => candidate.matchedQueries.includes(ingredient.name)),
+      }));
+      const choices = await chooseRecipeIngredientProducts({ needs, restrictions, requestContext });
+      resolved.push(...needs.map(({ key, ingredient }) => {
+        const selected = choices.get(key);
         return selected ? { ...ingredient, productId: selected.lookupProductId } : null;
       }));
     }
@@ -178,6 +236,74 @@ async function generateDinnerRecipeProposal({
     recipes,
     wishFulfillments,
   };
+}
+
+async function replaceDinnerRecipeIngredients({
+  currentPlan,
+  baseline,
+  operations,
+  directCandidates,
+  party,
+  partyWideRestrictions,
+  requestContext,
+}: {
+  currentPlan: PartyPlanDraft | null;
+  baseline: PlannerProposal;
+  operations: z.infer<typeof planOperationSchema>[];
+  directCandidates: Array<{
+    operationIndex: number;
+    candidates: Array<{ lookupProductId: string; product: HydratedProduct }>;
+  }>;
+  party: Input["currentParty"];
+  partyWideRestrictions: string[];
+  requestContext: RequestContext;
+}) {
+  if (!currentPlan || !operations.length || operations.some((operation) =>
+    operation.action !== "replace" || operation.targetType !== "product")) return null;
+  const targets = operations.map((operation, operationIndex) => {
+    if (operation.action !== "replace" || operation.targetType !== "product") return null;
+    for (const recipe of currentPlan.recipes) {
+      const ingredient = recipe.ingredients.find((item) => item.selectedProduct.id === operation.targetId);
+      if (ingredient) return { operation, operationIndex, recipe, ingredient };
+    }
+    return null;
+  });
+  if (targets.some((target) => !target)) return null;
+
+  const proposal = structuredClone(baseline);
+  for (const target of targets) {
+    if (!target) continue;
+    const candidateSet = directCandidates.find((set) => set.operationIndex === target.operationIndex);
+    const restrictions = [...new Set([
+      ...partyWideRestrictions,
+      ...party.members
+        .filter((member) => target.recipe.assignedMemberIds.includes(member.id))
+        .flatMap((member) => member.restrictions),
+    ])];
+    const key = String(target.operationIndex);
+    const choices = await chooseRecipeIngredientProducts({
+      needs: [{
+        key,
+        ingredient: {
+          name: target.ingredient.name,
+          amount: target.ingredient.baseAmount,
+          unit: target.ingredient.unit,
+        },
+        request: target.operation.request,
+        candidates: candidateSet?.candidates ?? [],
+      }],
+      restrictions,
+      requestContext,
+    });
+    const selected = choices.get(key);
+    if (!selected) continue;
+    const recipe = (proposal.recipes ?? []).find((item) => item.title === target.recipe.title);
+    const ingredient = recipe?.ingredients.find((item) =>
+      item.productId === target.ingredient.selectedProduct.lookupProductId
+      && item.name === target.ingredient.name);
+    if (ingredient) ingredient.productId = selected.lookupProductId;
+  }
+  return proposal;
 }
 
 function modeInstructions(
@@ -563,6 +689,21 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
 
       const result = await runPlanningLoop(state, {
         plan: async ({ previousBlockers }) => {
+          if (inputData.mode === "DINNER" && decision.intent === "plan_mutation") {
+            const replacement = await replaceDinnerRecipeIngredients({
+              currentPlan: recovered.plan,
+              baseline,
+              operations: decision.planOperations,
+              directCandidates,
+              party: applied.party,
+              partyWideRestrictions: inputData.partyWideRestrictions,
+              requestContext,
+            });
+            if (replacement) {
+              working = replacement;
+              return working;
+            }
+          }
           if (inputData.mode === "DINNER" && applied.affectedWishKeys.length) {
             const proposed = await generateDinnerRecipeProposal({
               party: applied.party,
