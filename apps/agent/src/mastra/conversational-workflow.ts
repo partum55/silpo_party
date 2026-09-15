@@ -290,7 +290,11 @@ async function replaceDinnerRecipeIngredients({
           unit: target.ingredient.unit,
         },
         request: target.operation.request,
-        candidates: candidateSet?.candidates ?? [],
+        // A replacement must select a genuinely different catalog listing. Otherwise validation sees the
+        // original ingredient still present and correctly reports that nothing changed.
+        candidates: (candidateSet?.candidates ?? []).filter((candidate) =>
+          candidate.product.id !== target.ingredient.selectedProduct.id
+          && candidate.lookupProductId !== target.ingredient.selectedProduct.lookupProductId),
       }],
       restrictions,
       requestContext,
@@ -321,7 +325,7 @@ function modeInstructions(
     return `SHOPPING mode: interpret purchase requests as direct product additions, never as recipes. Assign every newly requested product only to actor ${actorId}, and preserve other participants' products. ${budgetInstruction}`;
   }
   if (mode === "DINNER") {
-    return `DINNER mode: participants request dishes to cook. Every request to prepare or cook a dish must be represented as a recipe wish with recipe fulfillment, never as a direct catalog product or ready-made/semifinished dish. Create a complete recipe, add verified Silpo products for every purchasable ingredient, combine shared ingredients, assign each recipe to its requesters, and never buy pantry staples such as salt, pepper, water, or cooking oil. ${budgetInstruction}`;
+    return `DINNER mode supports both dishes to cook and ordinary standalone products. Every request to prepare or cook a dish must be a preference_mutation with fulfillmentStrategy "recipe", never a direct ready-made/semifinished dish. An ordinary product request that does not ask to cook a dish must be a plan_mutation and remain a direct catalog addition assigned to actor ${actorId}. Create complete recipes with verified Silpo ingredients, combine shared ingredients, and never buy pantry staples such as salt, pepper, water, or cooking oil. ${budgetInstruction}`;
   }
   return `EVENT mode: autonomously plan the event for all participants (${memberIds.join(", ")}). Cover essentials first: main food, a side, drinks, and a suitable sauce. Add snacks or other optional extras only when the remaining budget comfortably allows them. Assign shared purchases to everyone. ${budgetInstruction} ${eventPlanningGuidance({ message, participantCount: memberIds.length, hasCurrentPlan })}`;
 }
@@ -334,35 +338,23 @@ export function normalizeDecisionForMode(input: Input, value: z.infer<typeof con
     return actorWishes.find((wish) => wish.fulfillmentStrategy === "recipe"
       && wish.text.trim().replace(/\s+/g, " ").toLocaleLowerCase("uk") === normalized);
   };
-  if (input.mode === "DINNER"
-    && value.intent === "plan_mutation"
-    && value.planOperations.every((operation) => operation.action === "add")) {
-    return {
-      intent: "preference_mutation" as const,
-      preferenceOperations: value.planOperations.map((operation) => {
-        const text = operation.action === "add" ? operation.request : input.message;
-        const existing = existingRecipeWish(text);
-        return existing
-          ? { action: "replace" as const, wishId: existing.id, text, fulfillmentStrategy: "recipe" as const }
-          : { action: "add" as const, text, fulfillmentStrategy: "recipe" as const };
-      }),
-      planOperations: [],
-      readQuestion: null,
-    };
-  }
   if (input.mode === "DINNER" && value.intent === "preference_mutation") {
     return {
       ...value,
       preferenceOperations: value.preferenceOperations.map((operation) => {
-        if (operation.action === "add") {
+        if (operation.action === "add" && operation.fulfillmentStrategy === "recipe") {
           const existing = existingRecipeWish(operation.text);
           if (existing) return { action: "replace" as const, wishId: existing.id, text: operation.text, fulfillmentStrategy: "recipe" as const };
-          return { ...operation, fulfillmentStrategy: "recipe" as const };
         }
-        return operation.action === "replace"
-          ? { ...operation, fulfillmentStrategy: "recipe" as const }
-          : operation;
+        return operation;
       }),
+    };
+  }
+  if (input.mode === "DINNER" && value.intent === "plan_mutation") {
+    return {
+      ...value,
+      planOperations: value.planOperations.map((operation) =>
+        operation.action === "add" ? { ...operation, assignedMemberIds: [input.actorId] } : operation),
     };
   }
   if ((input.mode === "SHOPPING" || input.mode === "EVENT") && value.intent === "plan_mutation") {

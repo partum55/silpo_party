@@ -214,9 +214,9 @@ test("off-topic turns use fixed domain guardrail copy", () => {
   assert.deepEqual(result.planOperations, []);
 });
 
-test("dinner additions are normalized into recipe wishes", () => {
+test("ordinary dinner product additions remain direct catalog operations", () => {
   const input = conversationInputSchema.parse({
-    message: "Я хочу приготувати гавайську піцу, підбери продукти",
+    message: "додай кока-коли 2 літри",
     mode: "DINNER",
     actorId: "a",
     hostId: "a",
@@ -226,14 +226,14 @@ test("dinner additions are normalized into recipe wishes", () => {
   const decision = normalizeDecisionForMode(input, {
     intent: "plan_mutation",
     preferenceOperations: [],
-    planOperations: [{ action: "add", request: "гавайська піца", assignedMemberIds: ["a"] }],
+    planOperations: [{ action: "add", request: "кока-кола 2 літри", assignedMemberIds: ["someone-else"] }],
     readQuestion: null,
   });
 
   assert.deepEqual(decision, {
-    intent: "preference_mutation",
-    preferenceOperations: [{ action: "add", text: "гавайська піца", fulfillmentStrategy: "recipe" }],
-    planOperations: [],
+    intent: "plan_mutation",
+    preferenceOperations: [],
+    planOperations: [{ action: "add", request: "кока-кола 2 літри", assignedMemberIds: ["a"] }],
     readQuestion: null,
   });
 });
@@ -252,7 +252,7 @@ test("retrying the same dinner dish replaces its failed wish instead of duplicat
   });
   const decision = normalizeDecisionForMode(input, {
     intent: "preference_mutation",
-    preferenceOperations: [{ action: "add", text: "паста карбонара" }],
+    preferenceOperations: [{ action: "add", text: "паста карбонара", fulfillmentStrategy: "recipe" }],
     planOperations: [],
     readQuestion: null,
   });

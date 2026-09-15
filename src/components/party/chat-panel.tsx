@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 
 import { SparkleIcon } from "@/components/ui/icons";
+import { parseRecipeMessage, type ParsedRecipeMessage } from "@/lib/chat/recipe-message";
 
 import type { ChatMessage, Member } from "./types";
 
@@ -15,6 +16,57 @@ function ReplyPreview({ message, senderName }: { message: ChatMessage; senderNam
     <div className="mb-1.5 border-l-2 border-plum/40 pl-2 text-xs opacity-70">
       <p className="font-medium">{senderName}</p>
       <p className="line-clamp-2">{message.content}</p>
+    </div>
+  );
+}
+
+function RecipeCard({ recipe }: { recipe: ParsedRecipeMessage }) {
+  return (
+    <div className="mt-2 overflow-hidden rounded-[var(--radius-lg)] border border-butter/50 bg-paper-raised shadow-sm">
+      <div className="bg-gradient-to-br from-butter/35 via-tomato/10 to-plum/15 px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-tomato-ink">Рецепт</p>
+            <h3 className="mt-0.5 text-base font-semibold leading-tight text-ink">{recipe.title}</h3>
+          </div>
+          <span className="shrink-0 rounded-full border border-butter/60 bg-paper-raised/80 px-2.5 py-1 text-xs font-medium text-butter-ink">
+            {recipe.servings}
+          </span>
+        </div>
+      </div>
+
+      <div className="space-y-4 px-4 py-3.5">
+        <section>
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-basil">Інгредієнти</h4>
+          <ul className="grid gap-1.5 sm:grid-cols-2">
+            {recipe.ingredients.map((ingredient, index) => (
+              <li key={`${ingredient}-${index}`} className="rounded-lg bg-basil/8 px-2.5 py-2 text-xs leading-snug">
+                <span className="mr-1.5 text-basil">●</span>{ingredient}
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section>
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-plum">Приготування</h4>
+          <ol className="space-y-2.5">
+            {recipe.steps.map((step, index) => (
+              <li key={`${step}-${index}`} className="flex gap-2.5 text-xs leading-relaxed">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-plum/15 font-semibold text-plum">
+                  {index + 1}
+                </span>
+                <span>{step}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        {recipe.source && (
+          <a href={recipe.source} target="_blank" rel="noreferrer" className="inline-flex text-xs font-medium text-plum underline underline-offset-2">
+            Переглянути джерело ↗
+          </a>
+        )}
+      </div>
     </div>
   );
 }
@@ -87,9 +139,10 @@ export function ChatMessages({
           ? "Агент"
           : displayName(message);
         const repliedTo = message.reply_to_message_id ? messagesById.get(message.reply_to_message_id) : undefined;
+        const recipe = message.sender_type === "AGENT" ? parseRecipeMessage(message.content) : null;
         return (
           <div key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[80%] rounded-[var(--radius-md)] px-3.5 py-2 text-sm leading-snug ${bubbleClass(mine, message.sender_type)}`}>
+            <div className={`${recipe ? "max-w-[96%]" : "max-w-[80%]"} rounded-[var(--radius-md)] px-3.5 py-2 text-sm leading-snug ${bubbleClass(mine, message.sender_type)}`}>
               {!mine && (
                 <p className="mb-0.5 flex items-center gap-1 text-xs font-medium opacity-70">
                   {message.sender_type === "AGENT" && <SparkleIcon className="h-3 w-3" />}
@@ -99,7 +152,14 @@ export function ChatMessages({
               {message.sender_type === "AGENT" && repliedTo && (
                 <ReplyPreview message={repliedTo} senderName={displayName(repliedTo)} />
               )}
-              <p className="whitespace-pre-wrap">{message.content}</p>
+              {recipe ? (
+                <>
+                  {recipe.prefix && <p className="whitespace-pre-wrap">{recipe.prefix}</p>}
+                  <RecipeCard recipe={recipe} />
+                </>
+              ) : (
+                <p className="whitespace-pre-wrap">{message.content}</p>
+              )}
             </div>
           </div>
         );
