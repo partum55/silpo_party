@@ -401,10 +401,18 @@ const recipeUnitLabels = { g: "г", ml: "мл", piece: "шт." } as const;
 export function formatNewRecipes(
   currentPlan: PartyPlanDraft | null,
   updatedPlan: PartyPlanDraft | null,
+  affectedWishKeys: string[] = [],
 ) {
   const previousTitles = new Set(currentPlan?.recipes.map((recipe) => recipe.title) ?? []);
+  const affected = new Set(affectedWishKeys);
+  const requestedTitles = new Set((updatedPlan?.wishFulfillments ?? []).flatMap((fulfillment) =>
+    fulfillment.resolvedStrategy === "recipe"
+      && fulfillment.recipeTitle
+      && affected.has(`${fulfillment.memberId}:${fulfillment.wishId}`)
+      ? [fulfillment.recipeTitle]
+      : []));
   return (updatedPlan?.recipes ?? [])
-    .filter((recipe) => !previousTitles.has(recipe.title))
+    .filter((recipe) => !previousTitles.has(recipe.title) || requestedTitles.has(recipe.title))
     .map((recipe) => {
       const ingredients = recipe.ingredients.map((ingredient) => {
         const amount = new Intl.NumberFormat("uk-UA", { maximumFractionDigits: 2 }).format(ingredient.requiredAmount);
@@ -692,7 +700,11 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
       const addedProducts = (updatedPlan?.products ?? []).filter((product) =>
         !beforeKeys.has(`${product.id}:${[...product.assignedMemberIds].sort().join(",")}:${product.quantity}`));
       const addedNames = [...new Set(addedProducts.map((product) => product.name))];
-      const recipeText = formatNewRecipes(inputData.currentPlan as PartyPlanDraft | null, updatedPlan);
+      const recipeText = formatNewRecipes(
+        inputData.currentPlan as PartyPlanDraft | null,
+        updatedPlan,
+        applied.affectedWishKeys,
+      );
       return {
         responseText: [
           result.readiness === "ready"

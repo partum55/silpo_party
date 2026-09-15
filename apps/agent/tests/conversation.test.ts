@@ -297,6 +297,44 @@ test("new dinner recipes are included in the chat response", () => {
   assert.match(text, /2\. Змішайте з соусом\./);
 });
 
+test("a recipe fulfilling the current retry is shown even when its title already existed", () => {
+  const ingredientProduct = product("pasta");
+  const current: PartyPlanDraft = {
+    ...existingPlan(),
+    recipes: [{
+      title: "Паста карбонара",
+      source: "generated",
+      sourceUrl: null,
+      baseServings: 1,
+      servings: 1,
+      assignedMemberIds: ["a"],
+      ingredients: [{
+        name: "Спагеті",
+        baseAmount: 100,
+        requiredAmount: 100,
+        unit: "g",
+        purchaseQuantity: 1,
+        purchasedAmount: 400,
+        selectedProduct: ingredientProduct,
+      }],
+      steps: ["Приготуйте пасту."],
+    }],
+    wishFulfillments: [{
+      memberId: "a",
+      wishId: "carbonara",
+      requestedStrategy: "recipe",
+      resolvedStrategy: "recipe",
+      candidateProductIds: [],
+      selectedProductIds: [],
+      recipeTitle: "Паста карбонара",
+      fallbackReason: "explicit_cooking",
+    }],
+  };
+
+  assert.match(formatNewRecipes(current, current, ["a:carbonara"]), /Рецепт «Паста карбонара»/);
+  assert.equal(formatNewRecipes(current, current), "");
+});
+
 test("dinner ingredient selection enforces units and dietary restrictions", () => {
   const regularMilk = {
     ...product("regular-milk"),
