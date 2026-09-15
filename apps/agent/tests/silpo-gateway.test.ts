@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  availableTimeslot,
   extractFoodRestrictions,
   extractSearchProductIds,
   hasTimeslot,
@@ -92,6 +93,18 @@ test("validates the active cart timeslot against the live slot response", () => 
   assert.equal(hasTimeslot({ days: [{ slots: [{ start: "2026-09-14T10:00", end: "2026-09-14T12:00" }] }] },
     "2026-09-14T10:00", "2026-09-14T12:00"), true);
   assert.equal(hasTimeslot({ slots: [] }, "2026-09-14T10:00", "2026-09-14T12:00"), false);
+  assert.equal(hasTimeslot({ slots: [{ start: "2026-09-14T10:00", end: "2026-09-14T12:00", available: false }] },
+    "2026-09-14T10:00", "2026-09-14T12:00"), false);
+});
+
+test("selects a current available slot and prefers the cart delivery type", () => {
+  const slots = { slots: [
+    { start: "2026-09-15T09:00", end: "2026-09-15T10:00", available: true, deliveryType: "LongDelivery" },
+    { start: "2026-09-15T10:00", end: "2026-09-15T11:00", available: false, deliveryType: "DeliveryHome" },
+    { start: "2026-09-15T11:00", end: "2026-09-15T12:00", available: true, deliveryType: "DeliveryHome" },
+  ] };
+
+  assert.deepEqual(availableTimeslot(slots, "DeliveryHome"), slots.slots[2]);
 });
 
 test("serializes Silpo operations per user to protect OAuth refresh tokens", async () => {

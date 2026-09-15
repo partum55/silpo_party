@@ -68,7 +68,18 @@ export function toolArguments(schema: SilpoToolSchema, sources: unknown[]): Json
 export function hasTimeslot(payload: unknown, start: string, end: string) {
   return objects(payload).some((candidate) =>
     field(candidate, ["start", "timeslotStart", "from"]) === start
-    && field(candidate, ["end", "timeslotEnd", "to"]) === end);
+    && field(candidate, ["end", "timeslotEnd", "to"]) === end
+    && field(candidate, ["available", "isAvailable"]) !== false);
+}
+
+export function availableTimeslot(payload: unknown, preferredDeliveryType: string) {
+  const slots = objects(payload).filter((candidate) => {
+    const start = field(candidate, ["start", "timeslotStart", "from"]);
+    const end = field(candidate, ["end", "timeslotEnd", "to"]);
+    return typeof start === "string" && Boolean(start) && typeof end === "string" && Boolean(end)
+      && field(candidate, ["available", "isAvailable"]) !== false;
+  });
+  return slots.find((candidate) => field(candidate, ["deliveryType"]) === preferredDeliveryType) ?? slots[0] ?? null;
 }
 
 export async function listSilpoToolSchemas(client: Pick<SilpoClient, "listTools">): Promise<SilpoToolSchemas> {
@@ -273,20 +284,46 @@ async function cartContext(client: SilpoClient, schemas: SilpoToolSchemas) {
     throw new Error("Silpo cart is missing branch, delivery, or timeslot context.");
   }
   const typed = context as Record<"branchId" | "deliveryType" | "timeslotStart" | "timeslotEnd", string>;
-  const slots = await call(client, "silpo_get_time_slots", toolArguments(
-    schemas.get("silpo_get_time_slots")!,
-    [{
+  const timeslotSchema = schemas.get("silpo_get_time_slots")!;
+  // A Silpo cart can retain an expired delivery interval. Product search does not report that context error;
+  // it simply returns zero matches for every query. Ask for the branch's current slots without constraining
+  // the call to the stale interval, then use the cart's slot when it is still available or the next available
+  // slot of the same delivery type for read-only catalog discovery.
+  const slotSources = [{
+    branchId: typed.branchId,
+    deliveryType: typed.deliveryType,
+    deliveryTypes: [typed.deliveryType],
+    limit: 100,
+  }];
+  let slotArguments: JsonObject;
+  try {
+    slotArguments = toolArguments(timeslotSchema, slotSources);
+  } catch {
+    // Compatibility with an older MCP schema that required the current interval.
+    slotArguments = toolArguments(timeslotSchema, [{
       ...typed,
       shoppingCartId: current.shoppingCartId,
       start: typed.timeslotStart,
       end: typed.timeslotEnd,
       date: typed.timeslotStart.slice(0, 10),
-    }, cart.shipments[0], cart],
-  ));
-  if (!hasTimeslot(slots, typed.timeslotStart, typed.timeslotEnd)) {
-    throw new Error("The active Silpo cart timeslot is no longer available.");
+    }, cart.shipments[0], cart]);
   }
-  return typed;
+  const slots = await call(client, "silpo_get_time_slots", slotArguments);
+  if (hasTimeslot(slots, typed.timeslotStart, typed.timeslotEnd)) return typed;
+
+  const replacement = availableTimeslot(slots, typed.deliveryType);
+  const timeslotStart = replacement && field(replacement, ["start", "timeslotStart", "from"]);
+  const timeslotEnd = replacement && field(replacement, ["end", "timeslotEnd", "to"]);
+  const deliveryType = replacement && field(replacement, ["deliveryType"]);
+  if (typeof timeslotStart !== "string" || typeof timeslotEnd !== "string") {
+    throw new Error("The active Silpo cart timeslot is no longer available and no replacement slot was found.");
+  }
+  return {
+    branchId: typed.branchId,
+    deliveryType: typeof deliveryType === "string" && deliveryType ? deliveryType : typed.deliveryType,
+    timeslotStart,
+    timeslotEnd,
+  };
 }
 
 async function ensureCart(client: SilpoClient) {

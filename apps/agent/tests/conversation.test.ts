@@ -9,7 +9,12 @@ import {
 } from "../src/domain/conversation.ts";
 import { memberSchema } from "../src/domain/schemas.ts";
 import type { PartyPlanDraft, VerifiedProduct } from "../src/domain/validation.ts";
-import { conversationInputSchema, planAfterValidation, readOnlyResult } from "../src/mastra/conversational-workflow.ts";
+import {
+  conversationInputSchema,
+  OUT_OF_SCOPE_RESPONSE,
+  planAfterValidation,
+  readOnlyResult,
+} from "../src/mastra/conversational-workflow.ts";
 
 const product = (id: string): VerifiedProduct => ({
   id: `sku-${id}`,
@@ -168,6 +173,22 @@ test("read-only cost questions return frozen preferences and plan", () => {
   assert.deepEqual(result.preferenceOperations, []);
   assert.deepEqual(result.planOperations, []);
   assert.equal(result.readiness, "ready");
+});
+
+test("off-topic turns use fixed domain guardrail copy", () => {
+  const input = conversationInputSchema.parse({
+    message: "Розкажи як знайти градієнт",
+    actorId: "a",
+    hostId: "a",
+    scope: "auto",
+    currentParty: party,
+    currentPlan: existingPlan(),
+  });
+  const result = readOnlyResult(input, OUT_OF_SCOPE_RESPONSE);
+
+  assert.equal(result.responseText, OUT_OF_SCOPE_RESPONSE);
+  assert.deepEqual(result.updatedPlan, input.currentPlan);
+  assert.deepEqual(result.planOperations, []);
 });
 
 test("an invalid first draft is never persisted", () => {
