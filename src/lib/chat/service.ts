@@ -61,7 +61,7 @@ export async function sendMessage(partyId: string, userId: string, content: stri
   // freeze right after the response goes out). A message sent while another request already owns processing
   // returns immediately without draining (see tryAcquireAgentLock) — that owner's own drain loop re-checks
   // for unprocessed messages before releasing the lock, so this message is still picked up.
-  after(() => processPendingMessages(db, partyId, party!.creator_id));
+  after(() => processPendingMessagesSafely(db, partyId, party!.creator_id));
   return message;
 }
 
@@ -194,6 +194,24 @@ async function processPendingMessages(db: Db, partyId: string, creatorId: string
   if (racedMessages?.length) await processPendingMessages(db, partyId, creatorId);
 }
 
+async function processPendingMessagesSafely(db: Db, partyId: string, creatorId: string) {
+  try {
+    await processPendingMessages(db, partyId, creatorId);
+  } catch (error) {
+    const message = formatUnknownError(error);
+    console.error("Failed to drain party message queue", { partyId, error });
+    try {
+      await updateAgentState(db, partyId, {
+        agent_status: "ERROR",
+        agent_error: message,
+        active_agent_message_id: null,
+      });
+    } catch (statusError) {
+      console.error("Failed to publish party queue error", { partyId, statusError });
+    }
+  }
+}
+
 /**
  * Re-enters a queue whose original post-response callback was killed by a deploy, process restart, or host
  * timeout. The party page polls agent status, so an open page is also a lightweight queue watchdog.
@@ -208,5 +226,5 @@ export async function resumePendingMessages(partyId: string, creatorId: string) 
     .is("processed_at", null)
     .limit(1);
   if (error) throw error;
-  if (pending?.length) await processPendingMessages(db, partyId, creatorId);
+  if (pending?.length) await processPendingMessagesSafely(db, partyId, creatorId);
 }
