@@ -90,12 +90,17 @@ export function PartyLive({
 
     function applyAgentState(agentStatus: string, agentError: string | null, activeMessageId: string | null) {
       const changed = agentStatus !== lastAgentStatusRef.current;
+      const inProgress = agentStatus === "THINKING" || agentStatus === "SEARCHING" || agentStatus === "UPDATING_CART";
       lastAgentStatusRef.current = agentStatus;
       setParty((previous) => ({
         ...previous,
         agent_status: agentStatus,
         agent_error: agentError,
-        active_agent_message_id: activeMessageId,
+        // Legacy schemas cannot include this field in Realtime status updates. Keep the known reply target
+        // for the whole active turn; clear it only when processing actually finishes.
+        active_agent_message_id: inProgress
+          ? (activeMessageId ?? previous.active_agent_message_id)
+          : null,
       }));
       if (changed && (agentStatus === "DONE" || agentStatus === "ERROR")) {
         void Promise.all([refreshMessages(), refreshCart()]);
