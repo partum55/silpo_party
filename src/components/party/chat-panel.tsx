@@ -62,7 +62,12 @@ export function ChatMessages({
   }
 
   const messagesById = new Map(messages.map((message) => [message.id, message]));
-  const activeMessage = activeMessageId ? messagesById.get(activeMessageId) : undefined;
+  const resolvedActiveMessage = activeMessageId ? messagesById.get(activeMessageId) : undefined;
+  const newestUserMessage = messages.findLast((message) => message.sender_type === "USER");
+  const activeMessage = resolvedActiveMessage
+    // A status event may beat both the chat INSERT event and the status endpoint by one network round-trip.
+    // This is display-only and is replaced by the authoritative activeMessageId as soon as it arrives.
+    ?? (thinkingLabel ? newestUserMessage : undefined);
   const displayName = (message: ChatMessage) => message.sender_user_id === currentUserId
     ? "Ви"
     : (memberNames.get(message.sender_user_id ?? "")?.name ?? "Учасник");
