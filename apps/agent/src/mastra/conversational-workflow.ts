@@ -235,7 +235,30 @@ export function planAfterValidation(
   candidatePlan: PartyPlanDraft | null,
   readiness: "needs_input" | "invalid" | "ready",
 ) {
-  return readiness === "ready" ? candidatePlan : currentPlan;
+  if (readiness === "ready" || !currentPlan) return candidatePlan;
+  if (!candidatePlan || readiness === "needs_input") return currentPlan;
+
+  // Validation omits rejected products and incomplete recipes. Retain every approved candidate on a mixed
+  // result while restoring prior rows that may only be absent because their live refresh was inconclusive.
+  // Explicit removals remain all-or-nothing when another blocker exists, preventing an unrelated catalog
+  // miss from silently deleting something that was already visible in the shared plan.
+  const productKey = (product: VerifiedProduct) => `${product.id}:${[...product.assignedMemberIds].sort().join(",")}`;
+  const candidateProductKeys = new Set(candidatePlan.products.map(productKey));
+  const products = [
+    ...candidatePlan.products,
+    ...currentPlan.products.filter((product) => !candidateProductKeys.has(productKey(product))),
+  ];
+  const candidateRecipeTitles = new Set(candidatePlan.recipes.map((recipe) => recipe.title));
+  const recipes = [
+    ...candidatePlan.recipes,
+    ...currentPlan.recipes.filter((recipe) => !candidateRecipeTitles.has(recipe.title)),
+  ];
+  return {
+    ...candidatePlan,
+    products,
+    recipes,
+    totalUah: Math.round(products.reduce((sum, product) => sum + product.lineTotalUah, 0) * 100) / 100,
+  };
 }
 
 async function queryVariants(party: Input["currentParty"]) {
@@ -412,10 +435,27 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
         // publish the valid partial draft and report its blockers instead.
         maxRepairAttempts: 0,
         postValidate: (draft) => {
-          const operationBlockers = validatePlanOperations(recovered.plan, draft, decision.planOperations);
+          const candidateProductIdsByOperation = inputData.mode === "SHOPPING"
+            ? new Map(directCandidates.map((set) => [
+                set.operationIndex,
+                set.candidates.map((candidate) => candidate.lookupProductId),
+              ]))
+            : undefined;
+          const operationBlockers = validatePlanOperations(
+            recovered.plan,
+            draft,
+            decision.planOperations,
+            candidateProductIdsByOperation,
+          );
           const restrictionBlockers = directCandidates.flatMap((set) => {
             const operation = decision.planOperations[set.operationIndex];
-            if (!operation || !validatePlanOperations(recovered.plan, draft, [operation]).length || !set.candidates.length) return [];
+            const operationFailed = operation && validatePlanOperations(
+              recovered.plan,
+              draft,
+              [operation],
+              new Map([[0, set.candidates.map((candidate) => candidate.lookupProductId)]]),
+            ).length > 0;
+            if (!operation || !operationFailed || !set.candidates.length) return [];
             const assignedMemberIds = operation.action === "add"
               ? operation.assignedMemberIds
               : applied.party.members.map((member) => member.id);
@@ -427,7 +467,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
             ])];
             if (!restrictions.length) return [];
             const statuses = set.candidates.map(({ product }) => productRestrictionSafety(product, restrictions));
-            if (statuses.every((status) => status === "safe")) return [];
+            if (statuses.some((status) => status === "safe")) return [];
             const unsafe = statuses.every((status) => status === "unsafe");
             return [{
               code: unsafe ? "restriction_violation" as const : "restriction_unverified" as const,
@@ -456,14 +496,31 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
       const blockerPriority = (code: string) => code === "restriction_violation" || code === "restriction_unverified"
         ? 0
         : code === "no_suitable_products" || code === "plan_operation_unfulfilled" ? 2 : 1;
-      const blockerText = [...result.blockers]
+      const detailedBlockers = result.blockers.filter((blocker) => blocker.code !== "no_suitable_products"
+        || !result.blockers.some((other) => other.code === "plan_operation_unfulfilled"
+          || other.code === "restriction_violation"
+          || other.code === "restriction_unverified"));
+      const blockerMessages = [...new Set([...detailedBlockers]
         .sort((left, right) => blockerPriority(left.code) - blockerPriority(right.code))
-        .slice(0, 2)
-        .map((blocker) => blocker.message)
-        .join(" ");
+        .map((blocker) => blocker.message))];
+      const blockerText = blockerMessages.length ? `Не додано: ${blockerMessages.join(" ")}` : "";
+      const updatedPlan = planAfterValidation(
+        inputData.currentPlan as PartyPlanDraft | null,
+        result.currentPlan,
+        result.readiness,
+      );
+      const beforeKeys = new Set((inputData.currentPlan?.products ?? []).map((product) =>
+        `${product.id}:${[...product.assignedMemberIds].sort().join(",")}:${product.quantity}`));
+      const addedProducts = (updatedPlan?.products ?? []).filter((product) =>
+        !beforeKeys.has(`${product.id}:${[...product.assignedMemberIds].sort().join(",")}:${product.quantity}`));
+      const addedNames = [...new Set(addedProducts.map((product) => product.name))];
       return {
         responseText: [
-          result.readiness === "ready" ? "План вечірки оновлено." : "Чернетку не змінено, бо деякі товари потребують уваги.",
+          result.readiness === "ready"
+            ? "План вечірки оновлено."
+            : addedNames.length > 0
+              ? `До плану додано: ${addedNames.map((name) => `«${name}»`).join(", ")}.`
+              : "План не змінено.",
           blockerText,
           warningText,
         ].filter(Boolean).join(" "),
@@ -473,7 +530,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
         updatedPreferences: preferencesFromParty(applied.party),
         // Never replace an existing basket with an invalid partial draft. A transient catalog miss while
         // validating an incremental addition must not silently delete products that were already visible.
-        updatedPlan: planAfterValidation(inputData.currentPlan as PartyPlanDraft | null, result.currentPlan, result.readiness),
+        updatedPlan,
         blockers: result.blockers,
         warnings: result.warnings,
         questions: result.questions,

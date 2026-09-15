@@ -260,6 +260,7 @@ test("unknown restriction evidence cannot count toward coverage", async () => {
 
   assert.equal(result.readiness, "invalid");
   assert.ok(result.blockers.some((blocker) => blocker.code === "restriction_unverified"));
+  assert.equal(result.selectedProducts.length, 0);
 });
 
 test("coverage targets are injectable heuristics", async () => {
@@ -422,6 +423,7 @@ test("a lactose restriction rejects regular milk and accepts lactose-free milk",
   });
 
   assert.ok(regular.blockers.some((blocker) => blocker.code === "restriction_violation"));
+  assert.equal(regular.selectedProducts.length, 0);
   assert.equal(lactoseFree.readiness, "ready");
 });
 
@@ -490,6 +492,7 @@ test("a vegan restriction rejects cow milk by name even when Silpo omits metadat
 
   assert.ok(result.blockers.some((blocker) => blocker.code === "restriction_violation"));
   assert.equal(result.readiness, "invalid");
+  assert.equal(result.selectedProducts.length, 0);
 });
 
 test("ambiguous processed food without evidence remains unverified", async () => {

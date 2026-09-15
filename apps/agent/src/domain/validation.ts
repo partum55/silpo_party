@@ -288,6 +288,10 @@ export async function validateProposal({
       }
     }
 
+    // A selection rejected for every assignee must not leak into the validated partial draft. For a shared
+    // item, retain it only for the safe participants and keep blockers explaining who it was excluded for.
+    if (!safeIds.length) continue;
+
     const totalAmount = product.packageSize.amount * selection.quantity;
     const amountPerMember = totalAmount / assignedIds.length;
     for (const memberId of safeIds) {
@@ -302,8 +306,8 @@ export async function validateProposal({
       ...product,
       lookupProductId: selection.productId,
       quantity: selection.quantity,
-      assignedMemberIds: assignedIds,
-      reason: `Призначено для ${assignedIds.length} учасн${assignedIds.length === 1 ? "ика" : "иків"}.`,
+      assignedMemberIds: safeIds,
+      reason: `Призначено для ${safeIds.length} учасн${safeIds.length === 1 ? "ика" : "иків"}.`,
       lineTotalUah: productLineTotalUah(product, selection.quantity),
     };
     selectedProducts.push(verified);
@@ -395,7 +399,6 @@ export async function validateProposal({
         reason: `Інгредієнт для рецепта «${recipe.title}».`,
         lineTotalUah: productLineTotalUah(product, purchaseQuantity),
       };
-      selectedProducts.push(selectedProduct);
       ingredients.push({
         name: ingredient.name,
         baseAmount: ingredient.amount,
@@ -407,22 +410,27 @@ export async function validateProposal({
       });
     }
 
-    if (fullyResolved) {
+    if (fullyResolved && ingredients.length === recipe.ingredients.length && safeIds.size > 0) {
       const foodPerAssignedMember = recipe.ingredients
         .filter((ingredient) => ingredient.unit === "g")
         .reduce((sum, ingredient) => sum + ingredient.amount * scale, 0) / assignedIds.length;
       for (const memberId of safeIds) coverage[memberId].foodGrams += foodPerAssignedMember;
+      const approvedIngredients = ingredients.map((ingredient) => ({
+        ...ingredient,
+        selectedProduct: { ...ingredient.selectedProduct, assignedMemberIds: [...safeIds] },
+      }));
+      selectedProducts.push(...approvedIngredients.map((ingredient) => ingredient.selectedProduct));
+      recipes.push({
+        title: recipe.title,
+        source: recipe.source,
+        sourceUrl: recipe.sourceUrl,
+        baseServings: recipe.servings,
+        servings: assignedIds.length,
+        assignedMemberIds: [...safeIds],
+        ingredients: approvedIngredients,
+        steps: recipe.steps,
+      });
     }
-    recipes.push({
-      title: recipe.title,
-      source: recipe.source,
-      sourceUrl: recipe.sourceUrl,
-      baseServings: recipe.servings,
-      servings: assignedIds.length,
-      assignedMemberIds: [...safeIds],
-      ingredients,
-      steps: recipe.steps,
-    });
   }
 
   const candidateSets = new Map(wishCandidates.map((set) => [`${set.memberId}:${set.wishId}`, set]));

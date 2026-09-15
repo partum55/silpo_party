@@ -14,6 +14,7 @@ import {
 } from "../src/lib/party/rules.ts";
 
 test("a user at the active-party cap cannot create another", () => {
+  assert.equal(MAX_ACTIVE_PARTIES_PER_USER, 5);
   assert.deepEqual(checkCreate({ activePartyCountForUser: MAX_ACTIVE_PARTIES_PER_USER - 1 }), { ok: true });
   assert.deepEqual(checkCreate({ activePartyCountForUser: MAX_ACTIVE_PARTIES_PER_USER }), {
     ok: false,

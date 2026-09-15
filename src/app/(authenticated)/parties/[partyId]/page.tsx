@@ -48,6 +48,7 @@ export default async function PartyPage({
             status: party.status as "ACTIVE" | "COMPLETED",
             agent_status: party.agent_status as string,
             agent_error: (party.agent_error as string | null) ?? null,
+            active_agent_message_id: (party.active_agent_message_id as string | null) ?? null,
             join_code: party.join_code as string,
             mode: party.mode as "SHOPPING" | "DINNER" | "EVENT",
             budget_uah: party.budget_uah == null ? null : Number(party.budget_uah),

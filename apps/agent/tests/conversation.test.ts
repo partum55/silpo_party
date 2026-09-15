@@ -175,6 +175,26 @@ test("read-only cost questions return frozen preferences and plan", () => {
   assert.equal(result.readiness, "ready");
 });
 
+test("each addition is validated against its own catalog candidates", () => {
+  const currentPlan = existingPlan();
+  const operations = [
+    { action: "add" as const, request: "оселедець", assignedMemberIds: ["a"] },
+    { action: "add" as const, request: "креветки", assignedMemberIds: ["a"] },
+  ];
+  const after = {
+    ...currentPlan,
+    products: [...currentPlan.products, product("herring")],
+  };
+
+  const blockers = validatePlanOperations(currentPlan, after, operations, new Map([
+    [0, ["herring"]],
+    [1, ["shrimp"]],
+  ]));
+
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0]?.message ?? "", /креветки/);
+});
+
 test("off-topic turns use fixed domain guardrail copy", () => {
   const input = conversationInputSchema.parse({
     message: "Розкажи як знайти градієнт",
@@ -191,12 +211,26 @@ test("off-topic turns use fixed domain guardrail copy", () => {
   assert.deepEqual(result.planOperations, []);
 });
 
-test("an invalid first draft is never persisted", () => {
+test("an invalid draft persists its validated partial products", () => {
   const invalidMilkPlan = existingPlan();
 
-  assert.equal(planAfterValidation(null, invalidMilkPlan, "invalid"), null);
-  assert.equal(planAfterValidation(existingPlan(), invalidMilkPlan, "invalid")?.summary, "Existing");
+  assert.equal(planAfterValidation(null, invalidMilkPlan, "invalid"), invalidMilkPlan);
+  assert.deepEqual(planAfterValidation(existingPlan(), invalidMilkPlan, "invalid")?.products, invalidMilkPlan.products);
   assert.equal(planAfterValidation(null, invalidMilkPlan, "ready"), invalidMilkPlan);
+});
+
+test("a mixed-result draft adds approved products without losing the existing basket", () => {
+  const current = existingPlan();
+  const partial = {
+    ...existingPlan(),
+    products: [product("chips"), product("herring")],
+    totalUah: 100,
+  };
+
+  const persisted = planAfterValidation(current, partial, "invalid");
+
+  assert.deepEqual(persisted?.products.map((item) => item.name), ["chips", "herring", "cola"]);
+  assert.equal(persisted?.totalUah, 150);
 });
 
 test("participant readiness and host authorization stay outside model control", () => {

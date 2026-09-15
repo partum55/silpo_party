@@ -6,6 +6,7 @@ export type ChatMessage = {
   sender_type: "USER" | "AGENT" | "SYSTEM";
   sender_user_id: string | null;
   content: string;
+  reply_to_message_id: string | null;
   created_at: string;
 };
 
@@ -63,6 +64,7 @@ export type PartyStatus = {
   status: "ACTIVE" | "COMPLETED";
   agent_status: string;
   agent_error: string | null;
+  active_agent_message_id: string | null;
   join_code: string;
   mode: PartyMode;
   budget_uah: number | null;

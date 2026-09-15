@@ -2,7 +2,7 @@ export type PartyStatus = "ACTIVE" | "COMPLETED";
 export type MemberRole = "CREATOR" | "MEMBER";
 
 export const MAX_MEMBERS = 10;
-export const MAX_ACTIVE_PARTIES_PER_USER = 2;
+export const MAX_ACTIVE_PARTIES_PER_USER = 5;
 
 export type RuleError =
   | "not_found"

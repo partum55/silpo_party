@@ -15,7 +15,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ par
     if (party.status === "ACTIVE") {
       after(() => resumePendingMessages(partyId, party.creator_id));
     }
-    return Response.json({ agentStatus: party.agent_status, agentError: party.agent_error });
+    return Response.json({
+      agentStatus: party.agent_status,
+      agentError: party.agent_error,
+      activeMessageId: party.active_agent_message_id ?? null,
+    });
   } catch (error) {
     return toErrorResponse(error);
   }

@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 
 import { requireUser } from "@/lib/auth";
 import { isSilpoConnected } from "@/lib/silpo/connection";
-import { listMyParties } from "@/lib/party/service";
+import { listMyParties, MAX_ACTIVE_PARTIES_PER_USER } from "@/lib/party/service";
 import { errorMessage } from "@/lib/party/error-copy";
 import { PENDING_JOIN_COOKIE } from "@/lib/party/join-code";
 import type { PartyMode } from "@/lib/party/mode-copy";
@@ -32,6 +32,8 @@ export default async function Home({
 
   const { error } = await searchParams;
   const parties = (await listMyParties(user.id)) as Array<Record<string, unknown>>;
+  const activePartyCount = parties.filter((party) => party.status === "ACTIVE").length;
+  const atPartyLimit = activePartyCount >= MAX_ACTIVE_PARTIES_PER_USER;
   const firstName = ((user.user_metadata.full_name ?? user.user_metadata.name ?? "") as string).split(" ")[0];
 
   return (
@@ -45,7 +47,12 @@ export default async function Home({
         {error && <InlineAlert tone="error">{errorMessage(error)}</InlineAlert>}
 
         <Panel className="space-y-4">
-          <h2 className="font-medium">Створити вечірку</h2>
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="font-medium">Створити вечірку</h2>
+            <p className="text-xs text-ink-soft" aria-live="polite">
+              Активні вечірки: {activePartyCount} із {MAX_ACTIVE_PARTIES_PER_USER}
+            </p>
+          </div>
           <form action={createPartyAction} noValidate className="space-y-3">
             <input
               name="name"
@@ -62,7 +69,9 @@ export default async function Home({
               placeholder="Бюджет, грн (необов'язково)"
               className="w-full rounded-[var(--radius-md)] border border-stone bg-paper px-3 py-2.5 text-[0.95rem] placeholder:text-stone-600"
             />
-            <SubmitButton pendingText="Створюємо…" className="w-full">Створити вечірку</SubmitButton>
+            <SubmitButton disabled={atPartyLimit} pendingText="Створюємо…" className="w-full">
+              {atPartyLimit ? "Ліміт активних вечірок вичерпано" : "Створити вечірку"}
+            </SubmitButton>
           </form>
         </Panel>
 

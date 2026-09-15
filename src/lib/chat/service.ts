@@ -16,7 +16,7 @@ export async function listMessages(partyId: string, userId: string) {
   assertOk(checkRead({ isMember: Boolean(role), partyStatus: (party?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null }));
   const { data, error } = await db
     .from("chat_messages")
-    .select("id, sender_type, sender_user_id, content, created_at")
+    .select("id, sender_type, sender_user_id, content, reply_to_message_id, created_at")
     .eq("party_id", partyId)
     .order("created_at", { ascending: true });
   if (error) throw error;
@@ -56,7 +56,7 @@ async function tryAcquireAgentLock(db: Db, partyId: string) {
   const staleBefore = new Date(Date.now() - STALE_LOCK_MINUTES * 60_000).toISOString();
   const { data, error } = await db
     .from("parties")
-    .update({ agent_status: "THINKING", agent_error: null })
+    .update({ agent_status: "THINKING", agent_error: null, active_agent_message_id: null })
     .eq("id", partyId)
     .or(`agent_status.in.(IDLE,DONE,ERROR),and(agent_status.in.(THINKING,UPDATING_CART),updated_at.lt.${staleBefore})`)
     .select("id")
@@ -88,6 +88,12 @@ async function processPendingMessages(db: Db, partyId: string, creatorId: string
     const next = pending?.[0];
     if (!next) break;
 
+    const { error: activeMessageError } = await db
+      .from("parties")
+      .update({ agent_status: "THINKING", agent_error: null, active_agent_message_id: next.id })
+      .eq("id", partyId);
+    if (activeMessageError) throw activeMessageError;
+
     try {
       const result = await runConversationalTurn(db, {
         partyId,
@@ -106,18 +112,23 @@ async function processPendingMessages(db: Db, partyId: string, creatorId: string
       await syncCartFromPlan(db, partyId, result.updatedPlan as never);
       await db.from("chat_messages").update({ processed_at: new Date().toISOString() }).eq("id", next.id);
       if (result.responseText) {
-        await db.from("chat_messages").insert({ party_id: partyId, sender_type: "AGENT", content: result.responseText });
+        await db.from("chat_messages").insert({
+          party_id: partyId,
+          sender_type: "AGENT",
+          content: result.responseText,
+          reply_to_message_id: next.id,
+        });
       }
     } catch (turnError) {
       // Mark processed even on failure: a permanently-failing message would otherwise wedge the queue forever.
       await db.from("chat_messages").update({ processed_at: new Date().toISOString() }).eq("id", next.id);
       const message = formatUnknownError(turnError);
-      await db.from("parties").update({ agent_status: "ERROR", agent_error: message }).eq("id", partyId);
+      await db.from("parties").update({ agent_status: "ERROR", agent_error: message, active_agent_message_id: null }).eq("id", partyId);
       return;
     }
   }
 
-  await db.from("parties").update({ agent_status: "DONE" }).eq("id", partyId);
+  await db.from("parties").update({ agent_status: "DONE", active_agent_message_id: null }).eq("id", partyId);
 
   // Close the gap between the final empty read and releasing the lock. If a message arrived while the
   // status was still THINKING, its request could not acquire the lock; after DONE is visible, either this

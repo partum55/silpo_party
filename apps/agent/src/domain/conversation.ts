@@ -145,7 +145,12 @@ export function mergeWithProtectedPlan({
   return { summary: proposed.summary || baseline.summary, selections, recipes, wishFulfillments };
 }
 
-export function validatePlanOperations(before: PartyPlanDraft | null, after: PartyPlanDraft | null, operations: PlanOperation[]) {
+export function validatePlanOperations(
+  before: PartyPlanDraft | null,
+  after: PartyPlanDraft | null,
+  operations: PlanOperation[],
+  candidateProductIdsByOperation?: Map<number, string[]>,
+) {
   if (!operations.length) return [];
   const beforeProducts = new Set(before?.products.map((product) => product.id) ?? []);
   const afterProducts = new Set(after?.products.map((product) => product.id) ?? []);
@@ -158,11 +163,15 @@ export function validatePlanOperations(before: PartyPlanDraft | null, after: Par
     && previous.assignedMemberIds.every((id) => product.assignedMemberIds.includes(id)))) ?? [];
   const addedRecipes = after?.recipes.filter((recipe) => !beforeRecipes.has(recipe.title)) ?? [];
 
-  return operations.flatMap((operation) => {
+  return operations.flatMap((operation, operationIndex) => {
+    const candidateIds = candidateProductIdsByOperation?.get(operationIndex);
+    const matchesOperation = (product: VerifiedProduct) => candidateIds === undefined
+      || Boolean(product.lookupProductId && candidateIds.includes(product.lookupProductId));
     if (operation.action === "add") {
-      const fulfilled = addedProducts.some((product) => operation.assignedMemberIds.every((id) => product.assignedMemberIds.includes(id)))
+      const fulfilled = addedProducts.some((product) => matchesOperation(product)
+        && operation.assignedMemberIds.every((id) => product.assignedMemberIds.includes(id)))
         || addedRecipes.some((recipe) => operation.assignedMemberIds.every((id) => recipe.assignedMemberIds.includes(id)));
-      return fulfilled ? [] : [{ code: "plan_operation_unfulfilled" as const, message: `Новий елемент плану не виконує запит: ${operation.request}.` }];
+      return fulfilled ? [] : [{ code: "plan_operation_unfulfilled" as const, message: `«${operation.request}»: відповідний перевірений товар не знайдено або не вдалося додати.` }];
     }
     const targetExists = operation.targetType === "product" ? beforeProducts.has(operation.targetId) : beforeRecipes.has(operation.targetId);
     if (!targetExists) return [{ code: "plan_operation_unfulfilled" as const, message: `${operation.targetId} відсутній у поточному плані.` }];
@@ -170,7 +179,7 @@ export function validatePlanOperations(before: PartyPlanDraft | null, after: Par
     if (operation.action === "remove") {
       return targetStillExists ? [{ code: "plan_operation_unfulfilled" as const, message: `${operation.targetId} не видалено.` }] : [];
     }
-    const replacementAdded = addedProducts.length > 0 || addedRecipes.length > 0;
+    const replacementAdded = addedProducts.some(matchesOperation) || addedRecipes.length > 0;
     return !targetStillExists && replacementAdded
       ? []
       : [{ code: "plan_operation_unfulfilled" as const, message: `${operation.targetId} не замінено.` }];

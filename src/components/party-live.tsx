@@ -22,7 +22,7 @@ import { ChatIcon, CheckIcon, ListIcon } from "@/components/ui/icons";
 // Everything on this page that can change without this viewer doing anything — a message from someone else,
 // the agent's reply, its status ticking over, a member joining/leaving, the cart being rebuilt — arrives
 // through one Supabase Realtime channel (RLS-scoped: only party members receive events) instead of requiring
-// a page refresh. A status poll acts as a reconnect fallback because a browser/network can close that channel.
+// a page refresh. A periodic full snapshot acts as a reconnect/missed-event fallback.
 // party_members/carts/cart_items/cart_item_subscribers changes are refetched via the existing API routes rather
 // than patched incrementally (simpler and safer given syncCartFromPlan replaces cart_items wholesale, which
 // would otherwise show up as a burst of individual delete+insert events); chat_messages and the parties row
@@ -64,7 +64,6 @@ export function PartyLive({
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
     let active = true;
-    let realtimeConnected = false;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
     async function readJson<T>(path: string): Promise<T | null> {
@@ -89,25 +88,35 @@ export function PartyLive({
       if (active && data) setCart(data);
     };
 
-    function applyAgentState(agentStatus: string, agentError: string | null) {
+    function applyAgentState(agentStatus: string, agentError: string | null, activeMessageId: string | null) {
       const changed = agentStatus !== lastAgentStatusRef.current;
       lastAgentStatusRef.current = agentStatus;
-      setParty((previous) => ({ ...previous, agent_status: agentStatus, agent_error: agentError }));
+      setParty((previous) => ({
+        ...previous,
+        agent_status: agentStatus,
+        agent_error: agentError,
+        active_agent_message_id: activeMessageId,
+      }));
       if (changed && (agentStatus === "DONE" || agentStatus === "ERROR")) {
         void Promise.all([refreshMessages(), refreshCart()]);
       }
     }
 
     async function refreshAgentState() {
-      const data = await readJson<{ agentStatus: string; agentError: string | null }>(
+      const data = await readJson<{ agentStatus: string; agentError: string | null; activeMessageId: string | null }>(
         `/api/parties/${partyId}/agent-status`,
       );
-      if (active && data) applyAgentState(data.agentStatus, data.agentError);
+      if (active && data) applyAgentState(data.agentStatus, data.agentError, data.activeMessageId);
     }
 
     async function poll() {
-      await Promise.all([refreshAgentState(), ...(realtimeConnected ? [] : [refreshMessages()])]);
-      if (active) pollTimer = setTimeout(poll, realtimeConnected ? 15_000 : 2_000);
+      // Realtime delivers the fast path. A complete periodic snapshot remains active even after SUBSCRIBED:
+      // reconnects and RLS token refreshes can otherwise drop one table event while status events continue.
+      await Promise.all([refreshAgentState(), refreshMessages(), refreshMembers(), refreshCart()]);
+      const busy = lastAgentStatusRef.current === "THINKING"
+        || lastAgentStatusRef.current === "SEARCHING"
+        || lastAgentStatusRef.current === "UPDATING_CART";
+      if (active) pollTimer = setTimeout(poll, busy ? 2_000 : 5_000);
     }
 
     const channel = supabase
@@ -117,7 +126,11 @@ export function PartyLive({
         { event: "UPDATE", schema: "public", table: "parties", filter: `id=eq.${partyId}` },
         (payload) => {
           const next = payload.new as Record<string, unknown>;
-          applyAgentState(next.agent_status as string, (next.agent_error as string | null) ?? null);
+          applyAgentState(
+            next.agent_status as string,
+            (next.agent_error as string | null) ?? null,
+            (next.active_agent_message_id as string | null) ?? null,
+          );
           setParty((previous) => ({
             ...previous,
             status: next.status as PartyStatus["status"],
@@ -141,7 +154,6 @@ export function PartyLive({
         },
       )
       .subscribe((status, err) => {
-        realtimeConnected = status === "SUBSCRIBED";
         // No UI depends on this — it's here so a silent Realtime connection failure (RLS denial, network
         // issue) shows up in the browser console instead of just looking like "nothing updates live".
         if (status !== "SUBSCRIBED") console.log(`[party-live] realtime channel status: ${status}`, err ?? "");
@@ -185,8 +197,16 @@ export function PartyLive({
       // correctly deduped by the handler above instead of appearing as a second copy.
       const sent = (await response.json()) as ChatMessage;
       setMessages((previous) => (previous.some((message) => message.id === sent.id) ? previous : [...previous, sent]));
+      const wasBusy = lastAgentStatusRef.current === "THINKING"
+        || lastAgentStatusRef.current === "SEARCHING"
+        || lastAgentStatusRef.current === "UPDATING_CART";
       lastAgentStatusRef.current = "THINKING";
-      setParty((previous) => ({ ...previous, agent_status: "THINKING", agent_error: null }));
+      setParty((previous) => ({
+        ...previous,
+        agent_status: "THINKING",
+        agent_error: null,
+        active_agent_message_id: wasBusy ? previous.active_agent_message_id : sent.id,
+      }));
     } catch {
       setContent(text); // put it back so nothing is silently lost
     } finally {
@@ -236,7 +256,14 @@ export function PartyLive({
 
       <div className="flex-1 overflow-y-auto">
         <div hidden={tab !== "chat"}>
-          <ChatMessages messages={messages} currentUserId={currentUserId} memberNames={memberByUserId} listRef={listRef} thinkingLabel={thinkingLabel} />
+          <ChatMessages
+            messages={messages}
+            currentUserId={currentUserId}
+            memberNames={memberByUserId}
+            listRef={listRef}
+            thinkingLabel={thinkingLabel}
+            activeMessageId={party.active_agent_message_id}
+          />
         </div>
         <div hidden={tab !== "plan"}>
           <PlanPanel

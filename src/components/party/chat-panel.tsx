@@ -10,10 +10,20 @@ function bubbleClass(mine: boolean, senderType: ChatMessage["sender_type"]) {
   return "bg-paper-raised border border-stone text-ink";
 }
 
-function ThinkingBubble({ label }: { label: string }) {
+function ReplyPreview({ message, senderName }: { message: ChatMessage; senderName: string }) {
+  return (
+    <div className="mb-1.5 border-l-2 border-plum/40 pl-2 text-xs opacity-70">
+      <p className="font-medium">{senderName}</p>
+      <p className="line-clamp-2">{message.content}</p>
+    </div>
+  );
+}
+
+function ThinkingBubble({ label, message, senderName }: { label: string; message?: ChatMessage; senderName?: string }) {
   return (
     <div className="flex justify-start">
       <div className="max-w-[80%] rounded-[var(--radius-md)] border border-plum/20 bg-plum/10 px-3.5 py-2 text-sm text-ink">
+        {message && senderName && <ReplyPreview message={message} senderName={senderName} />}
         <p className="flex items-center gap-1.5">
           <SparkleIcon className="h-3.5 w-3.5 shrink-0 animate-pulse" />
           <span>{label}</span>
@@ -34,12 +44,14 @@ export function ChatMessages({
   memberNames,
   listRef,
   thinkingLabel,
+  activeMessageId,
 }: {
   messages: ChatMessage[];
   currentUserId: string;
   memberNames: Map<string, Member>;
   listRef: RefObject<HTMLDivElement | null>;
   thinkingLabel: string | undefined;
+  activeMessageId: string | null;
 }) {
   if (messages.length === 0 && !thinkingLabel) {
     return (
@@ -48,6 +60,12 @@ export function ChatMessages({
       </p>
     );
   }
+
+  const messagesById = new Map(messages.map((message) => [message.id, message]));
+  const activeMessage = activeMessageId ? messagesById.get(activeMessageId) : undefined;
+  const displayName = (message: ChatMessage) => message.sender_user_id === currentUserId
+    ? "Ви"
+    : (memberNames.get(message.sender_user_id ?? "")?.name ?? "Учасник");
 
   return (
     <div ref={listRef} className="space-y-2.5 px-4 py-4">
@@ -62,9 +80,8 @@ export function ChatMessages({
         const mine = message.sender_type === "USER" && message.sender_user_id === currentUserId;
         const senderName = message.sender_type === "AGENT"
           ? "Агент"
-          : mine
-            ? "Ви"
-            : (memberNames.get(message.sender_user_id ?? "")?.name ?? "Учасник");
+          : displayName(message);
+        const repliedTo = message.reply_to_message_id ? messagesById.get(message.reply_to_message_id) : undefined;
         return (
           <div key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
             <div className={`max-w-[80%] rounded-[var(--radius-md)] px-3.5 py-2 text-sm leading-snug ${bubbleClass(mine, message.sender_type)}`}>
@@ -74,12 +91,21 @@ export function ChatMessages({
                   {senderName}
                 </p>
               )}
+              {message.sender_type === "AGENT" && repliedTo && (
+                <ReplyPreview message={repliedTo} senderName={displayName(repliedTo)} />
+              )}
               <p className="whitespace-pre-wrap">{message.content}</p>
             </div>
           </div>
         );
       })}
-      {thinkingLabel && <ThinkingBubble label={thinkingLabel} />}
+      {thinkingLabel && (
+        <ThinkingBubble
+          label={thinkingLabel}
+          message={activeMessage}
+          senderName={activeMessage ? displayName(activeMessage) : undefined}
+        />
+      )}
     </div>
   );
 }
