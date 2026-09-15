@@ -33,7 +33,7 @@ import { partyPlannerAgent } from "./party-planner-agent.ts";
 import { reportAgentStatus } from "./party-status.ts";
 import { parsePlannerProposal, planSchema } from "./party-planning-workflow.ts";
 import { findRecipe } from "./tools/recipe-tool.ts";
-import { silpoUserId } from "./tools/silpo-tools.ts";
+import { cachedSilpoGateway, silpoUserId } from "./tools/silpo-tools.ts";
 
 export const conversationInputSchema = z.object({
   message: z.string().min(1),
@@ -379,7 +379,9 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
     // in here must not crash the whole turn; fail soft with the original, unmodified state instead.
     await reportAgentStatus(requestContext, "SEARCHING");
     try {
-      const silpo = createSilpoGateway(silpoUserId(requestContext));
+      // Share the turn's gateway with agent tools so products hydrated by a batch search can be reused by
+      // deterministic validation instead of making two more Silpo calls for every recipe ingredient.
+      const silpo = cachedSilpoGateway(silpoUserId(requestContext));
       const recovered = await recoverLookups(inputData.currentPlan as PartyPlanDraft | null, silpo);
       const baseline = planToProposal(recovered.plan);
       const wishCandidates = await discoverWishCandidates({
@@ -437,10 +439,12 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
             {
               // SHOPPING candidates are pre-searched and hydrated above. A single generation step is enough
               // to select from them and avoids redundant tool loops that can truncate the final JSON.
-              maxSteps: inputData.mode === "SHOPPING" ? 1 : inputData.mode === "DINNER" ? 12 : inputData.currentPlan ? 4 : 12,
+              maxSteps: inputData.mode === "SHOPPING" ? 1 : inputData.mode === "DINNER" ? 6 : inputData.currentPlan ? 4 : 12,
               toolChoice: inputData.mode === "SHOPPING" ? "none" : "auto",
               requestContext,
-              abortSignal: AbortSignal.timeout(60_000),
+              // Leave room inside the web app's 90-second turn deadline for classification, deterministic
+              // validation, persistence, and the final reply instead of letting the upstream fetch abort.
+              abortSignal: AbortSignal.timeout(inputData.mode === "DINNER" ? 50_000 : 60_000),
             },
           );
           let proposed;
@@ -466,10 +470,9 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
         },
         hydrate: silpo.hydrate,
         resolveRecipe: findRecipe,
-        // Ordinary conversational edits publish their valid partial result immediately. A DINNER recipe is
-        // atomic, though: one unavailable or unit-mismatched ingredient would otherwise discard the entire
-        // dish, so allow one blocker-guided pass to replace only the failed ingredient mapping.
-        maxRepairAttempts: inputData.mode === "DINNER" ? 1 : 0,
+        // Conversational turns have a 90-second caller deadline. Re-running a full tool-using recipe plan can
+        // exceed it; publish the validated result (and exact ingredient blockers) after one bounded pass.
+        maxRepairAttempts: 0,
         postValidate: (draft) => {
           const candidateProductIdsByOperation = inputData.mode === "SHOPPING"
             ? new Map(directCandidates.map((set) => [

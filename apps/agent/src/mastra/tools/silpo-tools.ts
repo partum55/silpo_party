@@ -16,8 +16,7 @@ const userGateways = new Map<string, {
   expiresAt: number;
 }>();
 
-function gateway(requestContext: RequestContext) {
-  const userId = silpoUserId(requestContext);
+export function cachedSilpoGateway(userId: string) {
   const cached = userGateways.get(userId);
   if (cached && cached.expiresAt > Date.now()) return cached.gateway;
 
@@ -29,6 +28,10 @@ function gateway(requestContext: RequestContext) {
   }, GATEWAY_CACHE_MS);
   cleanup.unref();
   return instance;
+}
+
+function gateway(requestContext: RequestContext) {
+  return cachedSilpoGateway(silpoUserId(requestContext));
 }
 
 export const silpoSearchProducts = createTool({
@@ -46,7 +49,11 @@ export const silpoSearchVerifiedProducts = createTool({
     queries: z.array(z.string().min(1)).min(1).max(4),
   }),
   outputSchema: z.object({ data: z.unknown() }),
-  execute: async ({ queries }, { requestContext }) => ({ data: await gateway(requestContext).searchVerified(queries) }),
+  execute: async ({ queries }, { requestContext }) => ({
+    // Two hydrated choices per ingredient are enough for fit/restriction selection and keep recipe tool
+    // payloads and catalog-detail calls bounded. The previous default hydrated up to 12 products per call.
+    data: await gateway(requestContext).searchVerified(queries, Math.min(queries.length * 2, 8)),
+  }),
 });
 
 export const silpoGetProductDetails = createTool({

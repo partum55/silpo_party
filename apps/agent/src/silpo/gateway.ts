@@ -354,6 +354,7 @@ export type CartLineItem = { productId: string; companyId: string; branchId: str
 
 export function createSilpoGateway(userId: string) {
   let schemasPromise: Promise<SilpoToolSchemas> | null = null;
+  const hydratedProducts = new Map<string, HydratedProduct>();
   // Cached per gateway instance (i.e. per conversational turn — see conversationalTurn/discoverCandidates/
   // planAndValidate, each of which creates one gateway). Branch/delivery/timeslot context doesn't change
   // within a single turn, but cartContext() itself costs 3 sequential Silpo calls — recomputing it on every
@@ -429,7 +430,7 @@ export function createSilpoGateway(userId: string) {
         }
       }
       const unique = interleaved.map((match) => [String(field(match, ["externalProductId"])), match] as const);
-      return (await Promise.all(unique.map(async ([lookupProductId, match]) => {
+      const verified = (await Promise.all(unique.map(async ([lookupProductId, match]) => {
         try {
           const details = await call(client, "silpo_get_product_details", {
             ...context,
@@ -446,6 +447,8 @@ export function createSilpoGateway(userId: string) {
           return null;
         }
       }))).flatMap((candidate) => candidate ? [candidate] : []);
+      for (const candidate of verified) hydratedProducts.set(candidate.lookupProductId, candidate.product);
+      return verified;
     }),
     search: (query: string) => withClient(async (client, schemas) => call(client, "silpo_find_products_batch", {
       ...await getContext(client, schemas),
@@ -457,16 +460,22 @@ export function createSilpoGateway(userId: string) {
       products: [query],
       limit: 10,
     }))),
-    hydrate: (productId: string) => withClient(async (client, schemas) => {
-      const reference = await productReference(client, schemas, productId);
-      const slug = reference && text(reference.values.slug);
-      if (!slug) return null;
-      const details = await call(client, "silpo_get_product_details", { ...reference.context, slug });
-      const normalized = normalizeSilpoProduct(details, String(field(reference.match, ["id"]) ?? ""), reference.match);
-      if (!normalized) return null;
-      const companyId = text(field(reference.match, ["companyId"]));
-      return companyId ? { ...normalized, companyId } : normalized;
-    }),
+    hydrate: (productId: string) => {
+      const cached = hydratedProducts.get(productId);
+      if (cached) return Promise.resolve(cached);
+      return withClient(async (client, schemas) => {
+        const reference = await productReference(client, schemas, productId);
+        const slug = reference && text(reference.values.slug);
+        if (!slug) return null;
+        const details = await call(client, "silpo_get_product_details", { ...reference.context, slug });
+        const normalized = normalizeSilpoProduct(details, String(field(reference.match, ["id"]) ?? ""), reference.match);
+        if (!normalized) return null;
+        const companyId = text(field(reference.match, ["companyId"]));
+        const product = companyId ? { ...normalized, companyId } : normalized;
+        hydratedProducts.set(productId, product);
+        return product;
+      });
+    },
     similar: (productId: string) => withClient(async (client, schemas) => {
       const reference = await productReference(client, schemas, productId);
       return reference
