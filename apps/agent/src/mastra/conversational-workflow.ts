@@ -1,4 +1,5 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
+import type { RequestContext } from "@mastra/core/request-context";
 import { z } from "zod";
 
 import {
@@ -26,7 +27,7 @@ import {
   warningSchema,
   wishChangeSchema,
 } from "../domain/schemas.ts";
-import { productRestrictionSafety, type PartyPlanDraft, type VerifiedProduct } from "../domain/validation.ts";
+import { isPantryStaple, productRestrictionSafety, type HydratedProduct, type PartyPlanDraft, type VerifiedProduct } from "../domain/validation.ts";
 import { validateModeAssignments } from "../domain/modes.ts";
 import { createSilpoGateway } from "../silpo/gateway.ts";
 import { partyPlannerAgent } from "./party-planner-agent.ts";
@@ -73,6 +74,112 @@ export const conversationOutputSchema = z.object({
 type Input = z.output<typeof conversationInputSchema>;
 type Gateway = ReturnType<typeof createSilpoGateway>;
 
+const generatedDinnerRecipeSchema = z.object({
+  title: z.string().min(1),
+  servings: z.number().int().positive(),
+  ingredients: z.array(z.object({
+    name: z.string().min(1),
+    amount: z.number().positive(),
+    unit: z.enum(["g", "ml", "piece"]),
+  }).strict()).min(2).max(8),
+  steps: z.array(z.string().min(1)).min(1).max(12),
+}).strict();
+
+export function selectRecipeIngredientCandidate(
+  ingredient: z.infer<typeof generatedDinnerRecipeSchema>["ingredients"][number],
+  candidates: Array<{ lookupProductId: string; product: HydratedProduct }>,
+  restrictions: string[],
+) {
+  return candidates.find(({ product }) => {
+    if (product.packageSize.unit !== ingredient.unit) return false;
+    const evidenceProduct = {
+      ...product,
+      metadata: {
+        ...product.metadata,
+        composition: [...(product.metadata.composition ?? []), ingredient.name],
+      },
+    };
+    return productRestrictionSafety(evidenceProduct, restrictions) === "safe";
+  }) ?? null;
+}
+
+async function generateDinnerRecipeProposal({
+  party,
+  affectedWishKeys,
+  partyWideRestrictions,
+  silpo,
+  requestContext,
+}: {
+  party: Input["currentParty"];
+  affectedWishKeys: string[];
+  partyWideRestrictions: string[];
+  silpo: Gateway;
+  requestContext: RequestContext;
+}) {
+  const affected = new Set(affectedWishKeys);
+  const requests = party.members.flatMap((member) => member.wishes.flatMap((wish) =>
+    affected.has(`${member.id}:${wish.id}`) && wish.fulfillmentStrategy === "recipe"
+      ? [{ member, wish }]
+      : []));
+  const recipes = [];
+  const wishFulfillments = [];
+
+  for (const { member, wish } of requests) {
+    const restrictions = [...new Set([...partyWideRestrictions, ...member.restrictions])];
+    const response = await partyPlannerAgent.generate(
+      `Return JSON for a practical home-cooked recipe matching the requested dish, with exactly these keys: {"title": string, "servings": number, "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece"}], "steps": string[]}. Write all displayed values in Ukrainian. Include 2-8 concrete purchasable ingredients, excluding pantry staples such as salt, pepper, water, and cooking oil. Ingredient names must be short Silpo catalog search terms rather than preparation descriptions. Use supermarket sale units: grams for produce, pasta, meat, and cheese; milliliters for liquids; and pieces only for genuinely count-based packaged products such as eggs. Respect every supplied dietary restriction. Do not return a ready-made or semifinished dish.\n${JSON.stringify({ requestedDish: wish.text, servings: 1, restrictions })}`,
+      {
+        structuredOutput: { schema: generatedDinnerRecipeSchema },
+        toolChoice: "none",
+        requestContext,
+        abortSignal: AbortSignal.timeout(20_000),
+      },
+    );
+    const recipe = response.object;
+    if (!recipe) continue;
+    const ingredients = recipe.ingredients.filter((ingredient) => !isPantryStaple(ingredient.name));
+    const resolved = [];
+    for (let offset = 0; offset < ingredients.length; offset += 4) {
+      const batch = ingredients.slice(offset, offset + 4);
+      const candidates = await silpo.searchVerified(batch.map((ingredient) => ingredient.name), batch.length * 2);
+      resolved.push(...batch.map((ingredient) => {
+        const selected = selectRecipeIngredientCandidate(
+          ingredient,
+          candidates.filter((candidate) => candidate.matchedQueries.includes(ingredient.name)),
+          restrictions,
+        );
+        return selected ? { ...ingredient, productId: selected.lookupProductId } : null;
+      }));
+    }
+    if (!resolved.length || resolved.some((ingredient) => !ingredient)) continue;
+
+    recipes.push({
+      title: recipe.title,
+      source: "generated" as const,
+      sourceUrl: null,
+      servings: recipe.servings,
+      assignedMemberIds: [member.id],
+      ingredients: resolved.filter((ingredient) => ingredient !== null),
+      steps: recipe.steps,
+    });
+    wishFulfillments.push({
+      memberId: member.id,
+      wishId: wish.id,
+      resolvedStrategy: "recipe" as const,
+      selectedProductIds: [],
+      recipeTitle: recipe.title,
+      fallbackReason: "explicit_cooking" as const,
+    });
+  }
+
+  return {
+    summary: recipes.length ? "Підібрано рецепти та продукти для приготування." : "Не вдалося підібрати всі інгредієнти.",
+    selections: [],
+    recipes,
+    wishFulfillments,
+  };
+}
+
 function modeInstructions(
   mode: Input["mode"],
   actorId: string,
@@ -95,16 +202,24 @@ function modeInstructions(
 
 export function normalizeDecisionForMode(input: Input, value: z.infer<typeof conversationDecisionSchema>) {
   const memberIds = input.currentParty.members.map((member) => member.id);
+  const actorWishes = input.currentParty.members.find((member) => member.id === input.actorId)?.wishes ?? [];
+  const existingRecipeWish = (text: string) => {
+    const normalized = text.trim().replace(/\s+/g, " ").toLocaleLowerCase("uk");
+    return actorWishes.find((wish) => wish.fulfillmentStrategy === "recipe"
+      && wish.text.trim().replace(/\s+/g, " ").toLocaleLowerCase("uk") === normalized);
+  };
   if (input.mode === "DINNER"
     && value.intent === "plan_mutation"
     && value.planOperations.every((operation) => operation.action === "add")) {
     return {
       intent: "preference_mutation" as const,
-      preferenceOperations: value.planOperations.map((operation) => ({
-        action: "add" as const,
-        text: operation.action === "add" ? operation.request : input.message,
-        fulfillmentStrategy: "recipe" as const,
-      })),
+      preferenceOperations: value.planOperations.map((operation) => {
+        const text = operation.action === "add" ? operation.request : input.message;
+        const existing = existingRecipeWish(text);
+        return existing
+          ? { action: "replace" as const, wishId: existing.id, text, fulfillmentStrategy: "recipe" as const }
+          : { action: "add" as const, text, fulfillmentStrategy: "recipe" as const };
+      }),
       planOperations: [],
       readQuestion: null,
     };
@@ -112,10 +227,16 @@ export function normalizeDecisionForMode(input: Input, value: z.infer<typeof con
   if (input.mode === "DINNER" && value.intent === "preference_mutation") {
     return {
       ...value,
-      preferenceOperations: value.preferenceOperations.map((operation) =>
-        operation.action === "add" || operation.action === "replace"
+      preferenceOperations: value.preferenceOperations.map((operation) => {
+        if (operation.action === "add") {
+          const existing = existingRecipeWish(operation.text);
+          if (existing) return { action: "replace" as const, wishId: existing.id, text: operation.text, fulfillmentStrategy: "recipe" as const };
+          return { ...operation, fulfillmentStrategy: "recipe" as const };
+        }
+        return operation.action === "replace"
           ? { ...operation, fulfillmentStrategy: "recipe" as const }
-          : operation),
+          : operation;
+      }),
     };
   }
   if ((input.mode === "SHOPPING" || input.mode === "EVENT") && value.intent === "plan_mutation") {
@@ -434,6 +555,24 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
 
       const result = await runPlanningLoop(state, {
         plan: async ({ previousBlockers }) => {
+          if (inputData.mode === "DINNER" && applied.affectedWishKeys.length) {
+            const proposed = await generateDinnerRecipeProposal({
+              party: applied.party,
+              affectedWishKeys: applied.affectedWishKeys,
+              partyWideRestrictions: inputData.partyWideRestrictions,
+              silpo,
+              requestContext,
+            });
+            working = mergeWithProtectedPlan({
+              baseline,
+              proposed,
+              currentPlan: recovered.plan,
+              affectedWishKeys: applied.affectedWishKeys,
+              planOperations: decision.planOperations,
+              invalidProductIds: previousBlockers.flatMap((blocker) => blocker.productId ?? []),
+            });
+            return working;
+          }
           const response = await partyPlannerAgent.generate(
             `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "productType": "food"|"drink"|"non_food", "quantity": number, "assignedMemberIds": string[], "reason": string}], "recipes": [{"title": string, "source": "web"|"generated", "sourceUrl": string|null, "servings": number, "assignedMemberIds": string[], "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece", "productId": string}], "steps": string[]}], "wishFulfillments": [{"memberId": string, "wishId": string, "resolvedStrategy": "ready_made"|"recipe", "selectedProductIds": string[], "recipeTitle": string|null, "fallbackReason": "explicit_cooking"|"no_candidates"|"no_safe_candidate"|"poor_match"|null}]}. Always include all three arrays, even if empty. Do not rename fields, omit fields, or add other keys — every selections/recipes item needs every listed field. Set productType semantically from the actual catalog item: household and hygiene goods are non_food; never label an edible product non_food to bypass restrictions. Modify only components required by the explicit operations or deterministic blockers below; preserve every unaffected product, recipe, assignment, quantity, and wish fulfillment shown in currentProposal exactly. Never change member status. Use the supplied hydrated wish candidates for wish products. For direct additions or replacements, use the supplied directCandidates first: their lookupProductId values are verified proposal IDs and their product objects contain hydrated facts. ${inputData.mode === "SHOPPING" ? "All SHOPPING catalog searches are already complete. Do not call any tool. Select every independently satisfiable request from directCandidates, omit only requests without a suitable candidate, and return the final JSON now." : "Call silpoSearchVerifiedProducts only when those candidates do not cover a concrete need, using one short catalog term per product/category (never quantities, event context, or a whole request)."} Satisfy a requested total amount using the available package size and quantity when the exact package size is unavailable. Quantity is always a positive integer count of the product's displayed purchasable increment/package, never kilograms or a raw recipe amount. Example: if the catalog increment is 100 g and 250 g is needed, use quantity 3.\n${modeInstructions(inputData.mode, inputData.actorId, applied.party.members.map((member) => member.id), inputData.budgetUah, inputData.message, Boolean(recovered.plan))}\n${JSON.stringify({ message: inputData.message, mode: inputData.mode, budgetUah: inputData.budgetUah, decision, currentParty: applied.party, currentProposal: working, wishCandidates, directCandidates, blockers: previousBlockers })}`,
             {

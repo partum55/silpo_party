@@ -30,7 +30,7 @@ test("every structuredOutput prompt mentions 'json'", () => {
       assert.match(prompt, /json/i, `prompt in ${file} is missing the word "json": ${prompt.slice(0, 80)}...`);
     }
   }
-  assert.equal(total, 5, "expected 5 structuredOutput call sites across these files; update this count if you add/remove one");
+  assert.equal(total, 6, "expected 6 structuredOutput call sites across these files; update this count if you add/remove one");
 });
 
 test("the agent contract and deterministic replies require Ukrainian", () => {

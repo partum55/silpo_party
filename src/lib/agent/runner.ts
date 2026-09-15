@@ -1,7 +1,5 @@
 import "server-only";
 
-import { createSilpoGateway } from "@silpo-party/agent/gateway";
-
 import { env } from "@/lib/env";
 import type { Db } from "@/lib/party/access";
 
@@ -10,14 +8,14 @@ export const AGENT_TURN_TIMEOUT_MS = 90_000;
 async function loadPartyMembers(db: Db, partyId: string) {
   const { data, error } = await db.from("party_members").select("user_id, wishes").eq("party_id", partyId);
   if (error) throw error;
-  return Promise.all((data ?? []).map(async (row) => ({
+  return (data ?? []).map((row) => ({
     id: row.user_id as string,
-    // Silpo owns this profile setting. Refresh it for every turn so a newly changed restriction applies
-    // immediately and remains participant-specific in shared plans.
-    restrictions: await createSilpoGateway(row.user_id as string).getFoodRestrictions(),
+    // Food restrictions are intentionally never read from the participant's Silpo profile. The agent only
+    // receives restrictions that are explicitly provided through the party conversation/request context.
+    restrictions: [],
     wishes: (Array.isArray(row.wishes) ? row.wishes : []) as never[],
     status: "collecting" as const,
-  })));
+  }));
 }
 
 async function loadPartySettings(db: Db, partyId: string) {

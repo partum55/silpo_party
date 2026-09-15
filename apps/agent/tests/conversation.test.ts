@@ -16,6 +16,7 @@ import {
   OUT_OF_SCOPE_RESPONSE,
   planAfterValidation,
   readOnlyResult,
+  selectRecipeIngredientCandidate,
 } from "../src/mastra/conversational-workflow.ts";
 
 const product = (id: string): VerifiedProduct => ({
@@ -237,6 +238,33 @@ test("dinner additions are normalized into recipe wishes", () => {
   });
 });
 
+test("retrying the same dinner dish replaces its failed wish instead of duplicating it", () => {
+  const input = conversationInputSchema.parse({
+    message: "хочу приготувати пасту карбонару",
+    mode: "DINNER",
+    actorId: "a",
+    hostId: "a",
+    scope: "auto",
+    currentParty: { members: [memberSchema.parse({
+      id: "a",
+      wishes: [{ id: "carbonara", text: "паста карбонара", fulfillmentStrategy: "recipe" }],
+    })] },
+  });
+  const decision = normalizeDecisionForMode(input, {
+    intent: "preference_mutation",
+    preferenceOperations: [{ action: "add", text: "паста карбонара" }],
+    planOperations: [],
+    readQuestion: null,
+  });
+
+  assert.deepEqual(decision.preferenceOperations, [{
+    action: "replace",
+    wishId: "carbonara",
+    text: "паста карбонара",
+    fulfillmentStrategy: "recipe",
+  }]);
+});
+
 test("new dinner recipes are included in the chat response", () => {
   const ingredientProduct = product("pasta");
   const updated: PartyPlanDraft = {
@@ -267,6 +295,39 @@ test("new dinner recipes are included in the chat response", () => {
   assert.match(text, /Спагеті — 200 г/);
   assert.match(text, /1\. Відваріть спагеті\./);
   assert.match(text, /2\. Змішайте з соусом\./);
+});
+
+test("dinner ingredient selection enforces units and dietary restrictions", () => {
+  const regularMilk = {
+    ...product("regular-milk"),
+    name: "Молоко коров'яче 2,5%",
+    packageSize: { amount: 900, unit: "ml" as const },
+  };
+  const lactoseFreeMilk = {
+    ...product("lactose-free-milk"),
+    name: "Молоко безлактозне",
+    packageSize: { amount: 900, unit: "ml" as const },
+    metadata: { ingredients: ["молоко"], allergens: ["молоко"], labels: ["без лактози"] },
+  };
+
+  const selected = selectRecipeIngredientCandidate(
+    { name: "безлактозне молоко", amount: 200, unit: "ml" },
+    [
+      { lookupProductId: "wrong-unit", product: product("milk-powder") },
+      { lookupProductId: "regular", product: regularMilk },
+      { lookupProductId: "safe", product: lactoseFreeMilk },
+    ],
+    ["lactose"],
+  );
+
+  assert.equal(selected?.lookupProductId, "safe");
+
+  const eggs = { ...product("eggs"), name: "Яйця курячі 10 шт", packageSize: { amount: 10, unit: "piece" as const } };
+  assert.equal(selectRecipeIngredientCandidate(
+    { name: "яєчні жовтки", amount: 2, unit: "piece" },
+    [{ lookupProductId: "eggs", product: eggs }],
+    [],
+  )?.lookupProductId, "eggs");
 });
 
 test("an invalid draft persists its validated partial products", () => {

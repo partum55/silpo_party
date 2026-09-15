@@ -14,7 +14,6 @@ import {
 } from "../src/silpo/gateway.ts";
 
 const requiredTools = [
-  "silpo_get_my_food_restrictions",
   "silpo_get_my_shopping_cart",
   "silpo_get_shopping_cart_by_id",
   "silpo_get_time_slots",
@@ -218,4 +217,19 @@ test("normalizes piece-count recipe products", () => {
 
   assert.equal(result?.category, "food");
   assert.deepEqual(result?.packageSize, { amount: 10, unit: "piece" });
+});
+
+test("prefers the package measure in a grocery name over a generic one-piece display ratio", () => {
+  const result = normalizeSilpoProduct({ product: {
+    id: "bacon",
+    name: "Бекон сирокопчений 150 г",
+    price: 95,
+    available: true,
+    ratio: "шт",
+    weighted: false,
+    displayRatio: "1 шт",
+    attributes: {},
+  } }, "bacon");
+
+  assert.deepEqual(result?.packageSize, { amount: 150, unit: "g" });
 });

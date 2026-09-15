@@ -8,7 +8,6 @@ export type SilpoToolSchema = { properties?: Record<string, object>; required?: 
 type SilpoToolSchemas = Map<string, SilpoToolSchema>;
 
 const requiredAgentTools = [
-  "silpo_get_my_food_restrictions",
   "silpo_get_my_shopping_cart",
   "silpo_get_shopping_cart_by_id",
   "silpo_get_time_slots",
@@ -112,7 +111,11 @@ function strings(value: unknown): string[] {
 }
 
 function packageSize(value: unknown, name: string): HydratedProduct["packageSize"] | null {
-  const match = `${text(value) ?? ""} ${name}`.match(/(\d+(?:[.,]\d+)?)\s*(кг|kg|г|g|мл|ml|л|l|шт|pcs?|pieces?)(?=$|\s|[,.)])/i);
+  const pattern = /(\d+(?:[.,]\d+)?)\s*(кг|kg|г|g|мл|ml|л|l|шт|pcs?|pieces?)(?=$|\s|[,.)])/i;
+  // Packaged groceries are frequently sold as "1 шт" in displayRatio even though the product name carries
+  // the useful recipe measure (for example, cheese 200 g). Prefer the name and use displayRatio as fallback
+  // for genuinely weighted products and names without an explicit size.
+  const match = name.match(pattern) ?? (text(value) ?? "").match(pattern);
   if (!match) return null;
   const amount = Number(match[1].replace(",", "."));
   const unit = match[2].toLowerCase();
@@ -405,8 +408,6 @@ export function createSilpoGateway(userId: string) {
   }
 
   return {
-    getFoodRestrictions: () => withClient(async (client) =>
-      extractFoodRestrictions(await call(client, "silpo_get_my_food_restrictions", {}))),
     searchVerified: (queries: string[], limit = 12) => withClient(async (client, schemas) => {
       const context = await getContext(client, schemas);
       const searches = await Promise.all(queries.map((query) => call(client, "silpo_find_products_batch", {
@@ -441,6 +442,8 @@ export function createSilpoGateway(userId: string) {
           const companyId = text(field(match, ["companyId"]));
           return {
             lookupProductId,
+            matchedQueries: queries.filter((_, queryIndex) => perQuery[queryIndex]
+              .some((candidate) => field(candidate, ["externalProductId"]) === field(match, ["externalProductId"]))),
             product: companyId ? { ...product, companyId } : product,
           };
         } catch {
