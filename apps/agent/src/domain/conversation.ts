@@ -53,6 +53,7 @@ function selection(product: VerifiedProduct) {
   if (!product.lookupProductId) return null;
   return {
     productId: product.lookupProductId,
+    productType: product.category,
     quantity: product.quantity,
     assignedMemberIds: product.assignedMemberIds,
     reason: product.reason,

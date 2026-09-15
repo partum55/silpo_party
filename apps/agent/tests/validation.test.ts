@@ -151,6 +151,36 @@ const products: Record<string, HydratedProduct> = {
     packageSize: { amount: 500, unit: "ml" },
     metadata: { ingredients: [], allergens: [], labels: [] },
   },
+  lavashWithoutMetadata: {
+    id: "lavashWithoutMetadata",
+    name: "Лаваш «Тундир» вірменський",
+    priceUah: 46,
+    unit: "шт",
+    available: true,
+    category: "food",
+    packageSize: { amount: 200, unit: "g" },
+    metadata: { ingredients: [], allergens: [], labels: [] },
+  },
+  cheeseChipsWithoutMetadata: {
+    id: "cheeseChipsWithoutMetadata",
+    name: "Чипси Pringles зі смаком сиру",
+    priceUah: 119,
+    unit: "шт",
+    available: true,
+    category: "food",
+    packageSize: { amount: 165, unit: "g" },
+    metadata: { ingredients: [], allergens: [], labels: [] },
+  },
+  toiletPaper: {
+    id: "toiletPaper",
+    name: "Папір туалетний 3-шаровий",
+    priceUah: 100,
+    unit: "шт",
+    available: true,
+    category: "food",
+    packageSize: { amount: 4, unit: "piece" },
+    metadata: { ingredients: [], allergens: [], labels: [] },
+  },
 };
 
 function proposal(selections: PlannerProposal["selections"]): PlannerProposal {
@@ -406,6 +436,46 @@ test("a lactose restriction accepts a clearly non-dairy drink when Silpo omits m
   });
 
   assert.equal(result.readiness, "ready");
+});
+
+test("lactose validation accepts unrelated sparse food but rejects a dairy-named snack", async () => {
+  const restrictedInput: PartyPlanningInput = {
+    request: "Add a product",
+    currentParty: { members: [{ id: "a", restrictions: ["lactose"] }] },
+  };
+  const lavash = await validateProposal({
+    input: restrictedInput,
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([{ productId: "lavashWithoutMetadata", productType: "food", quantity: 1, assignedMemberIds: ["a"], reason: "Lavash" }]),
+    hydrate,
+    targets: { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 },
+  });
+  const cheeseChips = await validateProposal({
+    input: restrictedInput,
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([{ productId: "cheeseChipsWithoutMetadata", productType: "food", quantity: 1, assignedMemberIds: ["a"], reason: "Chips" }]),
+    hydrate,
+    targets: { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 },
+  });
+
+  assert.equal(lavash.readiness, "ready");
+  assert.ok(cheeseChips.blockers.some((blocker) => blocker.code === "restriction_violation"));
+});
+
+test("dietary restrictions do not block model-classified non-food Silpo merchandise", async () => {
+  const result = await validateProposal({
+    input: { request: "Add toilet paper", currentParty: { members: [{ id: "a", restrictions: ["lactose", "vegan"] }] } },
+    budgetUah: null,
+    partyWideRestrictions: [],
+    proposal: proposal([{ productId: "toiletPaper", productType: "non_food", quantity: 1, assignedMemberIds: ["a"], reason: "Household item" }]),
+    hydrate,
+    targets: { foodGramsPerPerson: 0, drinkMillilitersPerPerson: 0 },
+  });
+
+  assert.equal(result.readiness, "ready");
+  assert.equal(result.selectedProducts[0]?.category, "non_food");
 });
 
 test("a vegan restriction rejects cow milk by name even when Silpo omits metadata", async () => {

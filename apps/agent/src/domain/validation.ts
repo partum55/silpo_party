@@ -27,7 +27,7 @@ export type HydratedProduct = {
   unit: string;
   available: boolean;
   weighted?: boolean;
-  category: "food" | "drink";
+  category: "food" | "drink" | "non_food";
   packageSize: { amount: number; unit: "g" | "ml" | "piece" };
   metadata: ProductMetadata;
   /** Silpo's per-listing company id, required to write this product into a real Silpo cart. */
@@ -102,13 +102,14 @@ type IngredientRestrictionRule = {
   explicitlySafe: RegExp;
   forbiddenName?: RegExp;
   allowUnlabeledDrinks?: boolean;
+  allowWhenNameUnrelated?: boolean;
 };
 
 // Covers the common dietary exclusions and the major food-allergen families returned by Silpo. These are
 // deliberately stem-based because profile values and catalog attributes may independently be Ukrainian or
 // English and use different grammatical forms.
 const ingredientRestrictionRules: IngredientRestrictionRule[] = [
-  { restriction: /lactose|lactoza|лактоз/, forbidden: /lactose|лактоз|milk|cream|молок|вершк/, explicitlySafe: /lactose[- ]?free|без\s*лактоз|безлактоз/, forbiddenName: /молоко|вершк|сметан|кефір|йогурт|dairy milk|cow'?s? milk|cream|yogurt|kefir/, allowUnlabeledDrinks: true },
+  { restriction: /lactose|lactoza|лактоз/, forbidden: /lactose|лактоз|milk|cream|butter|whey|cheese|молок|вершк|масло|сироват|сир/, explicitlySafe: /lactose[- ]?free|без\s*лактоз|безлактоз/, forbiddenName: /молоко|вершк|сметан|кефір|йогурт|масло|сироват|сир|dairy milk|cow'?s? milk|cream|yogurt|kefir|butter|whey|cheese/, allowUnlabeledDrinks: true, allowWhenNameUnrelated: true },
   { restriction: /gluten|глютен|celiac|целіак/, forbidden: /gluten|wheat|barley|rye|spelt|пшениц|ячмін|жит(?:о|н)|полб/, explicitlySafe: /gluten[- ]?free|без\s*глютен|безглютен/ },
   { restriction: /peanut|арахіс/, forbidden: /peanut|groundnut|арахіс/, explicitlySafe: /peanut[- ]?free|без\s*арахіс/ },
   { restriction: /tree nuts?|горіх|мигдал|фундук|кеш['’]?ю|фісташ/, forbidden: /tree nuts?|nut|almond|hazelnut|cashew|pistachio|walnut|pecan|macadamia|горіх|мигдал|фундук|кеш['’]?ю|фісташ|пекан|макадам/, explicitlySafe: /nut[- ]?free|без\s*горіх/ },
@@ -140,6 +141,7 @@ function isObviouslyUnaffectedWholeFood(product: HydratedProduct, name: string) 
 }
 
 function restrictionSafety(product: HydratedProduct, restriction: string): RestrictionResult {
+  if (product.category === "non_food") return "safe";
   const value = restriction.toLocaleLowerCase("uk");
   const ingredients = normalize([
     ...product.metadata.ingredients,
@@ -198,12 +200,22 @@ function restrictionSafety(product: HydratedProduct, restriction: string): Restr
     // Silpo omits composition/allergen attributes for some catalog drinks (observed for kvass). A named
     // non-dairy beverage cannot violate lactose intolerance merely because that optional metadata is absent.
     if (rule.allowUnlabeledDrinks && product.category === "drink") return "safe";
+    // Lactose intolerance is relevant only when the catalog identifies a dairy signal. Unlike an allergy,
+    // an unrelated product name with sparse optional composition metadata is not evidence of lactose.
+    if (rule.allowWhenNameUnrelated && !rule.forbiddenName?.test(name)) return "safe";
   }
 
   // Unknown profile restrictions are never silently ignored. The planner may only use a product when its
   // Silpo name/labels explicitly repeat that restriction; otherwise validation blocks the assignment.
   if (labels.includes(value) || name.includes(value)) return "safe";
   return "unknown";
+}
+
+export function productRestrictionSafety(product: HydratedProduct, restrictions: string[]): RestrictionResult {
+  const results = restrictions.map((restriction) => restrictionSafety(product, restriction));
+  if (results.includes("unsafe")) return "unsafe";
+  if (results.includes("unknown")) return "unknown";
+  return "safe";
 }
 
 export async function validateProposal({
@@ -243,11 +255,14 @@ export async function validateProposal({
   const verifiedSelections = new Map<string, VerifiedProduct>();
 
   for (const selection of proposal.selections) {
-    const product = await hydrate(selection.productId);
-    if (!product) {
+    const catalogProduct = await hydrate(selection.productId);
+    if (!catalogProduct) {
       blockers.push({ code: "product_not_found", message: `Товар Silpo ${selection.productId} не знайдено.`, productId: selection.productId });
       continue;
     }
+    const product: HydratedProduct = selection.productType === "non_food"
+      ? { ...catalogProduct, category: "non_food" }
+      : catalogProduct;
     if (!product.available) {
       blockers.push({ code: "product_unavailable", message: `Товар «${product.name}» недоступний.`, productId: product.id });
       continue;

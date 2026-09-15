@@ -59,6 +59,7 @@ export const partyPlanningInputSchema = z.object({
 
 export const plannerSelectionSchema = z.object({
   productId: z.string().min(1),
+  productType: z.enum(["food", "drink", "non_food"]).default("food"),
   // Count of catalog purchase increments/packages, never kilograms or a free-form recipe amount.
   quantity: z.number().int().positive(),
   assignedMemberIds: z.array(z.string().min(1)).min(1),

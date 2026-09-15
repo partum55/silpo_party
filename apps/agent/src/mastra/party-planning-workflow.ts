@@ -34,7 +34,7 @@ export const productSchema = z.object({
   unit: z.string(),
   available: z.boolean(),
   weighted: z.boolean().optional(),
-  category: z.enum(["food", "drink"]),
+  category: z.enum(["food", "drink", "non_food"]),
   packageSize: z.object({ amount: z.number(), unit: z.enum(["g", "ml", "piece"]) }),
   metadata: z.object({
     ingredients: z.array(z.string()),
@@ -220,7 +220,7 @@ const planAndValidate = createStep({
     const result = await runPlanningLoop(inputData as PartyPlanningState, {
       plan: async ({ state, previousBlockers }) => {
         const response = await partyPlannerAgent.generate(
-          `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "quantity": number, "assignedMemberIds": string[], "reason": string}], "recipes": [{"title": string, "source": "web"|"generated", "sourceUrl": string|null, "servings": number, "assignedMemberIds": string[], "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece", "productId": string}], "steps": string[]}], "wishFulfillments": [{"memberId": string, "wishId": string, "resolvedStrategy": "ready_made"|"recipe", "selectedProductIds": string[], "recipeTitle": string|null, "fallbackReason": "explicit_cooking"|"no_candidates"|"no_safe_candidate"|"poor_match"|null}]}. Always include all three arrays. Do not rename fields or add other keys. Candidate lookupProductIds are the only IDs allowed for ready-made wish fulfillment. Rank the full hydrated candidate set rather than automatically choosing its first item. A wish may use several candidates for variety. Consider participant preferences, participant-specific restrictions, price, quantity, variety, and closeness to the wish.
+          `Return JSON with exactly these top-level keys: {"summary": string, "selections": [{"productId": string, "productType": "food"|"drink"|"non_food", "quantity": number, "assignedMemberIds": string[], "reason": string}], "recipes": [{"title": string, "source": "web"|"generated", "sourceUrl": string|null, "servings": number, "assignedMemberIds": string[], "ingredients": [{"name": string, "amount": number, "unit": "g"|"ml"|"piece", "productId": string}], "steps": string[]}], "wishFulfillments": [{"memberId": string, "wishId": string, "resolvedStrategy": "ready_made"|"recipe", "selectedProductIds": string[], "recipeTitle": string|null, "fallbackReason": "explicit_cooking"|"no_candidates"|"no_safe_candidate"|"poor_match"|null}]}. Always include all three arrays. Do not rename fields or add other keys. Set productType semantically from the catalog item and never label edible merchandise non_food to bypass restrictions. Candidate lookupProductIds are the only IDs allowed for ready-made wish fulfillment. Rank the full hydrated candidate set rather than automatically choosing its first item. A wish may use several candidates for variety. Consider participant preferences, participant-specific restrictions, price, quantity, variety, and closeness to the wish.
 
 Current party and request:
 ${JSON.stringify({ mode: state.mode, request: state.request, members: state.currentParty.members, participantCount: state.currentParty.members.length, budgetUah: state.budgetUah, partyWideRestrictions: state.restrictions, coverageTargets, wishCandidates: state.wishCandidates })}
