@@ -12,7 +12,7 @@ import { getMemberReady, getMembership, getPartyRow, type Db } from "@/lib/party
 function isMissingReplyTrackingColumn(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const value = error as { code?: unknown; message?: unknown };
-  return value.code === "42703" && typeof value.message === "string"
+  return (value.code === "42703" || value.code === "PGRST204") && typeof value.message === "string"
     && (value.message.includes("reply_to_message_id") || value.message.includes("active_agent_message_id"));
 }
 
