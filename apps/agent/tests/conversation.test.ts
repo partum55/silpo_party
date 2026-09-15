@@ -11,6 +11,8 @@ import { memberSchema } from "../src/domain/schemas.ts";
 import type { PartyPlanDraft, VerifiedProduct } from "../src/domain/validation.ts";
 import {
   conversationInputSchema,
+  formatNewRecipes,
+  normalizeDecisionForMode,
   OUT_OF_SCOPE_RESPONSE,
   planAfterValidation,
   readOnlyResult,
@@ -209,6 +211,62 @@ test("off-topic turns use fixed domain guardrail copy", () => {
   assert.equal(result.responseText, OUT_OF_SCOPE_RESPONSE);
   assert.deepEqual(result.updatedPlan, input.currentPlan);
   assert.deepEqual(result.planOperations, []);
+});
+
+test("dinner additions are normalized into recipe wishes", () => {
+  const input = conversationInputSchema.parse({
+    message: "Я хочу приготувати гавайську піцу, підбери продукти",
+    mode: "DINNER",
+    actorId: "a",
+    hostId: "a",
+    scope: "auto",
+    currentParty: party,
+  });
+  const decision = normalizeDecisionForMode(input, {
+    intent: "plan_mutation",
+    preferenceOperations: [],
+    planOperations: [{ action: "add", request: "гавайська піца", assignedMemberIds: ["a"] }],
+    readQuestion: null,
+  });
+
+  assert.deepEqual(decision, {
+    intent: "preference_mutation",
+    preferenceOperations: [{ action: "add", text: "гавайська піца", fulfillmentStrategy: "recipe" }],
+    planOperations: [],
+    readQuestion: null,
+  });
+});
+
+test("new dinner recipes are included in the chat response", () => {
+  const ingredientProduct = product("pasta");
+  const updated: PartyPlanDraft = {
+    ...existingPlan(),
+    recipes: [{
+      title: "Паста карбонара",
+      source: "generated",
+      sourceUrl: null,
+      baseServings: 2,
+      servings: 2,
+      assignedMemberIds: ["a"],
+      ingredients: [{
+        name: "Спагеті",
+        baseAmount: 200,
+        requiredAmount: 200,
+        unit: "g",
+        purchaseQuantity: 1,
+        purchasedAmount: 400,
+        selectedProduct: ingredientProduct,
+      }],
+      steps: ["Відваріть спагеті.", "Змішайте з соусом."],
+    }],
+  };
+
+  const text = formatNewRecipes(existingPlan(), updated);
+
+  assert.match(text, /Рецепт «Паста карбонара» \(2 порц\.\)/);
+  assert.match(text, /Спагеті — 200 г/);
+  assert.match(text, /1\. Відваріть спагеті\./);
+  assert.match(text, /2\. Змішайте з соусом\./);
 });
 
 test("an invalid draft persists its validated partial products", () => {

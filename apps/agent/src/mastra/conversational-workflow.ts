@@ -88,13 +88,27 @@ function modeInstructions(
     return `SHOPPING mode: interpret purchase requests as direct product additions, never as recipes. Assign every newly requested product only to actor ${actorId}, and preserve other participants' products. ${budgetInstruction}`;
   }
   if (mode === "DINNER") {
-    return `DINNER mode: participants request dishes. Use recipes, combine the purchasable ingredients, assign each recipe to its requesters, and never buy pantry staples such as salt, pepper, water, or cooking oil. ${budgetInstruction}`;
+    return `DINNER mode: participants request dishes to cook. Every request to prepare or cook a dish must be represented as a recipe wish with recipe fulfillment, never as a direct catalog product or ready-made/semifinished dish. Create a complete recipe, add verified Silpo products for every purchasable ingredient, combine shared ingredients, assign each recipe to its requesters, and never buy pantry staples such as salt, pepper, water, or cooking oil. ${budgetInstruction}`;
   }
   return `EVENT mode: autonomously plan the event for all participants (${memberIds.join(", ")}). Cover essentials first: main food, a side, drinks, and a suitable sauce. Add snacks or other optional extras only when the remaining budget comfortably allows them. Assign shared purchases to everyone. ${budgetInstruction} ${eventPlanningGuidance({ message, participantCount: memberIds.length, hasCurrentPlan })}`;
 }
 
-function normalizeDecisionForMode(input: Input, value: z.infer<typeof conversationDecisionSchema>) {
+export function normalizeDecisionForMode(input: Input, value: z.infer<typeof conversationDecisionSchema>) {
   const memberIds = input.currentParty.members.map((member) => member.id);
+  if (input.mode === "DINNER"
+    && value.intent === "plan_mutation"
+    && value.planOperations.every((operation) => operation.action === "add")) {
+    return {
+      intent: "preference_mutation" as const,
+      preferenceOperations: value.planOperations.map((operation) => ({
+        action: "add" as const,
+        text: operation.action === "add" ? operation.request : input.message,
+        fulfillmentStrategy: "recipe" as const,
+      })),
+      planOperations: [],
+      readQuestion: null,
+    };
+  }
   if (input.mode === "DINNER" && value.intent === "preference_mutation") {
     return {
       ...value,
@@ -261,6 +275,27 @@ export function planAfterValidation(
   };
 }
 
+const recipeUnitLabels = { g: "г", ml: "мл", piece: "шт." } as const;
+
+export function formatNewRecipes(
+  currentPlan: PartyPlanDraft | null,
+  updatedPlan: PartyPlanDraft | null,
+) {
+  const previousTitles = new Set(currentPlan?.recipes.map((recipe) => recipe.title) ?? []);
+  return (updatedPlan?.recipes ?? [])
+    .filter((recipe) => !previousTitles.has(recipe.title))
+    .map((recipe) => {
+      const ingredients = recipe.ingredients.map((ingredient) => {
+        const amount = new Intl.NumberFormat("uk-UA", { maximumFractionDigits: 2 }).format(ingredient.requiredAmount);
+        return `• ${ingredient.name} — ${amount} ${recipeUnitLabels[ingredient.unit]}`;
+      });
+      const steps = recipe.steps.map((step, index) => `${index + 1}. ${step}`);
+      const source = recipe.sourceUrl ? `\nДжерело: ${recipe.sourceUrl}` : "";
+      return `Рецепт «${recipe.title}» (${recipe.servings} порц.):\nІнгредієнти:\n${ingredients.join("\n")}\nПриготування:\n${steps.join("\n")}${source}`;
+    })
+    .join("\n\n");
+}
+
 async function queryVariants(party: Input["currentParty"]) {
   const wishes = party.members.flatMap((member) => member.wishes
     .filter((wish) => wish.fulfillmentStrategy !== "recipe")
@@ -302,7 +337,7 @@ The allowed domain is every product sold by Silpo—including non-food household
 
 If intent is "read_only": preferenceOperations and planOperations must both be [], and readQuestion must be set (not null). Questions are read_only and must have no operations.
 
-If intent is "preference_mutation": planOperations must be [], readQuestion must be null. Each preferenceOperations item is exactly one of {"action":"add","text":string,"fulfillmentStrategy"?:"ready_made"|"recipe"|"either"}, {"action":"replace","wishId":string,"text":string,"fulfillmentStrategy"?:"ready_made"|"recipe"|"either"}, {"action":"remove","wishId":string}, or {"action":"reset"}. Produce incremental add/remove/replace/reset operations only for the actor; never return a complete wish list and never change participant status.
+If intent is "preference_mutation": planOperations must be [], readQuestion must be null. Each preferenceOperations item is exactly one of {"action":"add","text":string,"fulfillmentStrategy"?:"ready_made"|"recipe"|"either"}, {"action":"replace","wishId":string,"text":string,"fulfillmentStrategy"?:"ready_made"|"recipe"|"either"}, {"action":"remove","wishId":string}, or {"action":"reset"}. Produce incremental add/remove/replace/reset operations only for the actor; never return a complete wish list and never change participant status. In DINNER mode, a request to cook or prepare any dish is a preference_mutation with fulfillmentStrategy "recipe", regardless of whether a ready-made version of that dish exists in the catalog.
 
 If intent is "plan_mutation": preferenceOperations must be [], readQuestion must be null, planOperations must be non-empty. Each planOperations item is exactly one of {"action":"add","request":string,"assignedMemberIds":string[]}, {"action":"remove","targetType":"product"|"recipe","targetId":string}, or {"action":"replace","targetType":"product"|"recipe","targetId":string,"request":string}. targetId values must come from currentPlan.
 
@@ -402,7 +437,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
             {
               // SHOPPING candidates are pre-searched and hydrated above. A single generation step is enough
               // to select from them and avoids redundant tool loops that can truncate the final JSON.
-              maxSteps: inputData.mode === "SHOPPING" ? 1 : inputData.currentPlan ? 4 : 12,
+              maxSteps: inputData.mode === "SHOPPING" ? 1 : inputData.mode === "DINNER" ? 12 : inputData.currentPlan ? 4 : 12,
               toolChoice: inputData.mode === "SHOPPING" ? "none" : "auto",
               requestContext,
               abortSignal: AbortSignal.timeout(60_000),
@@ -431,10 +466,10 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
         },
         hydrate: silpo.hydrate,
         resolveRecipe: findRecipe,
-        // A conversational edit is incremental and mergeWithProtectedPlan already preserves the valid
-        // baseline. Re-running a full tool-using plan for one failed addition can turn one edit into minutes;
-        // publish the valid partial draft and report its blockers instead.
-        maxRepairAttempts: 0,
+        // Ordinary conversational edits publish their valid partial result immediately. A DINNER recipe is
+        // atomic, though: one unavailable or unit-mismatched ingredient would otherwise discard the entire
+        // dish, so allow one blocker-guided pass to replace only the failed ingredient mapping.
+        maxRepairAttempts: inputData.mode === "DINNER" ? 1 : 0,
         postValidate: (draft) => {
           const candidateProductIdsByOperation = inputData.mode === "SHOPPING"
             ? new Map(directCandidates.map((set) => [
@@ -515,6 +550,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
       const addedProducts = (updatedPlan?.products ?? []).filter((product) =>
         !beforeKeys.has(`${product.id}:${[...product.assignedMemberIds].sort().join(",")}:${product.quantity}`));
       const addedNames = [...new Set(addedProducts.map((product) => product.name))];
+      const recipeText = formatNewRecipes(inputData.currentPlan as PartyPlanDraft | null, updatedPlan);
       return {
         responseText: [
           result.readiness === "ready"
@@ -522,6 +558,7 @@ Respect the supplied scope. ${modeInstructions(inputData.mode, inputData.actorId
             : addedNames.length > 0
               ? `До плану додано: ${addedNames.map((name) => `«${name}»`).join(", ")}.`
               : "План не змінено.",
+          recipeText,
           blockerText,
           warningText,
         ].filter(Boolean).join(" "),
