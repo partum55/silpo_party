@@ -9,18 +9,35 @@ import { formatUnknownError } from "@/lib/errors";
 import { assertOk, checkRead, checkSendMessage } from "@/lib/party/rules";
 import { getMemberReady, getMembership, getPartyRow, type Db } from "@/lib/party/access";
 
+function isMissingReplyTrackingColumn(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { code?: unknown; message?: unknown };
+  return value.code === "42703" && typeof value.message === "string"
+    && (value.message.includes("reply_to_message_id") || value.message.includes("active_agent_message_id"));
+}
+
 export async function listMessages(partyId: string, userId: string) {
   const db = createSupabaseAdminClient();
   const role = await getMembership(db, partyId, userId);
   const party = await getPartyRow(db, partyId);
   assertOk(checkRead({ isMember: Boolean(role), partyStatus: (party?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null }));
-  const { data, error } = await db
+  const result = await db
     .from("chat_messages")
     .select("id, sender_type, sender_user_id, content, reply_to_message_id, created_at")
     .eq("party_id", partyId)
     .order("created_at", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  if (!result.error) return result.data ?? [];
+  if (!isMissingReplyTrackingColumn(result.error)) throw result.error;
+
+  // Allows an application deployment to precede the additive migration without taking the entire party
+  // page down. Reply previews activate automatically as soon as the migration is applied.
+  const legacy = await db
+    .from("chat_messages")
+    .select("id, sender_type, sender_user_id, content, created_at")
+    .eq("party_id", partyId)
+    .order("created_at", { ascending: true });
+  if (legacy.error) throw legacy.error;
+  return (legacy.data ?? []).map((message) => ({ ...message, reply_to_message_id: null }));
 }
 
 export async function sendMessage(partyId: string, userId: string, content: string) {
@@ -54,15 +71,40 @@ const STALE_LOCK_MINUTES = 2;
 
 async function tryAcquireAgentLock(db: Db, partyId: string) {
   const staleBefore = new Date(Date.now() - STALE_LOCK_MINUTES * 60_000).toISOString();
-  const { data, error } = await db
+  let result = await db
     .from("parties")
     .update({ agent_status: "THINKING", agent_error: null, active_agent_message_id: null })
     .eq("id", partyId)
     .or(`agent_status.in.(IDLE,DONE,ERROR),and(agent_status.in.(THINKING,UPDATING_CART),updated_at.lt.${staleBefore})`)
     .select("id")
     .maybeSingle();
-  if (error) throw error;
-  return Boolean(data);
+  if (isMissingReplyTrackingColumn(result.error)) {
+    result = await db
+      .from("parties")
+      .update({ agent_status: "THINKING", agent_error: null })
+      .eq("id", partyId)
+      .or(`agent_status.in.(IDLE,DONE,ERROR),and(agent_status.in.(THINKING,UPDATING_CART),updated_at.lt.${staleBefore})`)
+      .select("id")
+      .maybeSingle();
+  }
+  if (result.error) throw result.error;
+  return Boolean(result.data);
+}
+
+async function updateAgentState(
+  db: Db,
+  partyId: string,
+  values: { agent_status: string; agent_error?: string | null; active_agent_message_id: string | null },
+) {
+  let result = await db.from("parties").update(values).eq("id", partyId);
+  if (isMissingReplyTrackingColumn(result.error)) {
+    const legacyValues = {
+      agent_status: values.agent_status,
+      ...("agent_error" in values ? { agent_error: values.agent_error } : {}),
+    };
+    result = await db.from("parties").update(legacyValues).eq("id", partyId);
+  }
+  if (result.error) throw result.error;
 }
 
 /**
@@ -88,11 +130,11 @@ async function processPendingMessages(db: Db, partyId: string, creatorId: string
     const next = pending?.[0];
     if (!next) break;
 
-    const { error: activeMessageError } = await db
-      .from("parties")
-      .update({ agent_status: "THINKING", agent_error: null, active_agent_message_id: next.id })
-      .eq("id", partyId);
-    if (activeMessageError) throw activeMessageError;
+    await updateAgentState(db, partyId, {
+      agent_status: "THINKING",
+      agent_error: null,
+      active_agent_message_id: next.id,
+    });
 
     try {
       const result = await runConversationalTurn(db, {
@@ -112,23 +154,31 @@ async function processPendingMessages(db: Db, partyId: string, creatorId: string
       await syncCartFromPlan(db, partyId, result.updatedPlan as never);
       await db.from("chat_messages").update({ processed_at: new Date().toISOString() }).eq("id", next.id);
       if (result.responseText) {
-        await db.from("chat_messages").insert({
+        let replyInsert = await db.from("chat_messages").insert({
           party_id: partyId,
           sender_type: "AGENT",
           content: result.responseText,
           reply_to_message_id: next.id,
         });
+        if (isMissingReplyTrackingColumn(replyInsert.error)) {
+          replyInsert = await db.from("chat_messages").insert({
+            party_id: partyId,
+            sender_type: "AGENT",
+            content: result.responseText,
+          });
+        }
+        if (replyInsert.error) throw replyInsert.error;
       }
     } catch (turnError) {
       // Mark processed even on failure: a permanently-failing message would otherwise wedge the queue forever.
       await db.from("chat_messages").update({ processed_at: new Date().toISOString() }).eq("id", next.id);
       const message = formatUnknownError(turnError);
-      await db.from("parties").update({ agent_status: "ERROR", agent_error: message, active_agent_message_id: null }).eq("id", partyId);
+      await updateAgentState(db, partyId, { agent_status: "ERROR", agent_error: message, active_agent_message_id: null });
       return;
     }
   }
 
-  await db.from("parties").update({ agent_status: "DONE", active_agent_message_id: null }).eq("id", partyId);
+  await updateAgentState(db, partyId, { agent_status: "DONE", active_agent_message_id: null });
 
   // Close the gap between the final empty read and releasing the lock. If a message arrived while the
   // status was still THINKING, its request could not acquire the lock; after DONE is visible, either this
