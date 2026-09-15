@@ -41,3 +41,10 @@ test("the agent contract and deterministic replies require Ukrainian", () => {
   assert.match(conversation, /План вечірки оновлено/);
   assert.doesNotMatch(conversation, /Party plan updated|Sorry,|I updated the draft/);
 });
+
+test("shopping selection cannot spend its only generation step on a tool call", () => {
+  const conversation = readFileSync(path.join(dir, "..", "src/mastra/conversational-workflow.ts"), "utf8");
+
+  assert.match(conversation, /toolChoice: inputData\.mode === "SHOPPING" \? "none" : "auto"/);
+  assert.match(conversation, /Select every independently satisfiable request from directCandidates/);
+});
