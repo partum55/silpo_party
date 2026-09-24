@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createCache, createMemoryStore, createNoopCache } from "../src/cache/cache.ts";
-import { namesQuery, resolveItems, type ItemNeed } from "../src/pipeline/resolve-items.ts";
+import { hasBrand, namesQuery, resolveItems, type ItemNeed } from "../src/pipeline/resolve-items.ts";
 import { createCatalogSession } from "../src/silpo/catalog.ts";
 import { createFakeLlm, pickByName } from "./helpers/fake-llm.ts";
 import { createFakeSilpo } from "./helpers/fake-silpo.ts";
@@ -145,4 +145,26 @@ test("a learned choice that became unavailable is forgotten and searched again",
   const result = await resolveItems([need("0", "картопля", "картопля")], { session: secondSession, llm, cache });
   assert.equal(result.resolved[0]?.via === "learned", false);
   assert.equal(second.calls.filter((call) => call.name === "silpo_find_products_batch").length, 1);
+});
+
+test("a named brand is the only acceptable product, even when the model would take the first hit", async () => {
+  const fake = createFakeSilpo();
+  const firstHit = (data: { needs: Array<{ key: string }> }) => ({ choices: data.needs.map((entry) => ({ key: entry.key, index: 0 })) });
+  const { llm } = createFakeLlm([["For each shopping need", firstHit]]);
+  const session = createCatalogSession({ userId: "host", client: fake.client, schemas: fake.schemas, cache: createNoopCache() });
+
+  const oldSpice = await resolveItems([need("0", "old spice", "гель для душу", { brand: "Old Spice" })], { session, llm });
+  assert.equal(oldSpice.resolved[0]?.product.name, "Гель для душу-шампунь Old Spice 2в1 Bearglove");
+
+  const nivea = await resolveItems([need("0", "nivea", "гель для душу", { brand: "Nivea" })], { session, llm });
+  assert.deepEqual(nivea.resolved, []);
+  assert.deepEqual(nivea.unresolved.map((item) => [item.reason, item.suggestions]), [
+    ["no_brand", ["Гель для душу Palmolive з ожиною", "Гель для душу-шампунь Old Spice 2в1 Bearglove"]],
+  ]);
+});
+
+test("hasBrand ignores case, spaces, and punctuation", () => {
+  assert.equal(hasBrand("Напій COCA COLA 1 л", "Coca-Cola"), true);
+  assert.equal(hasBrand("Шоколад молочний Milka з малиною", "milka"), true);
+  assert.equal(hasBrand("Гель для душу Palmolive", "Old Spice"), false);
 });

@@ -20,7 +20,7 @@ import { fallbackShoppingRoute, routeMessage, type ProductOp, type Route } from 
 import type { CatalogSession } from "../silpo/catalog.ts";
 import { unlimitedDeadline, type Deadline } from "./deadline.ts";
 import { addProducts, findPlanProducts, finishPlan, removeRows, setRowQuantity, toPlanProduct } from "./plan-builder.ts";
-import { resolveItems, type ItemNeed, type ResolveResult, type ResolvedItem, type UnresolvedItem } from "./resolve-items.ts";
+import { hasBrand, resolveItems, type ItemNeed, type ResolveResult, type ResolvedItem, type UnresolvedItem } from "./resolve-items.ts";
 import { buildResponseText, formatUah, type TurnReport } from "./response.ts";
 
 export type TurnDeps = {
@@ -114,6 +114,7 @@ function productNeed(op: ProductOp, index: number, assignedMemberIds: string[], 
     label: op.label,
     query: op.query,
     altQueries: op.altQueries,
+    ...(op.brand ? { brand: op.brand, query: hasBrand(op.query, op.brand) ? op.query : `${op.query} ${op.brand}` } : {}),
     requested: { count: op.count, amount: op.amount, unit: op.unit },
     assignedMemberIds,
     requestKey: requestKey ?? `item:${normalizeKey(op.query)}`,
@@ -161,6 +162,8 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnOut
   const needs: PlannedNeed[] = [];
   const unresolvedAll: UnresolvedItem[] = [];
   const addAssignees = input.mode === "EVENT" ? memberIds : [input.actorId];
+  // Rows removed by a "replace", by the key of the need that buys their replacement.
+  const replaced = new Map<string, VerifiedProduct[]>();
   const directReason = input.mode === "EVENT" ? "Спільна покупка для події." : "Запит учасника.";
 
   // 1. Edits to existing rows need no catalog calls.
@@ -189,6 +192,7 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnOut
       // Replacement keeps the need (and its recipe link) but buys a different product for the same people.
       plan = removeRows(plan, rows, { exclude: false });
       report.removed.push(...rows);
+      replaced.set(`op:${index}`, rows);
       const assignees = [...new Set(rows.flatMap((row) => row.assignedMemberIds))];
       const requestKey = rows.find((row) => row.requestKey)?.requestKey;
       needs.push(productNeed(op, index, assignees, rows[0].reason, requestKey));
@@ -280,6 +284,18 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnOut
       if (fitted.dropped.length) report.notes.push(`Щоб вкластися в бюджет, не додано: ${fitted.dropped.map((item) => `«${item.need.label}»`).join(", ")}.`);
       if (fitted.swapped.length) report.notes.push(`Для бюджету обрано дешевші варіанти: ${fitted.swapped.map((item) => `«${item.product.name}»`).join(", ")}.`);
       resolved = [...others, ...fitted.items];
+    }
+
+    // A replacement that found nothing, or only the same product again (e.g. through a learned pick for a
+    // generic query), keeps the original row instead of deleting it or reporting it as removed and re-added.
+    for (const [key, originals] of replaced) {
+      const item = resolved.find((entry) => entry.need.key === key);
+      const productKey = (product: { id: string; lookupProductId?: string }) => product.lookupProductId ?? product.id;
+      if (item && !originals.some((row) => productKey(row) === productKey(item.product))) continue;
+      if (item) resolved = resolved.filter((entry) => entry !== item);
+      plan = addProducts(plan, originals).plan;
+      report.removed = report.removed.filter((row) => !originals.includes(row));
+      report.notes.push(`Не знайшов іншого товару замість «${originals[0].name}», тому залишив його.`);
     }
 
     const byKey = new Map(needs.map((need) => [need.key, need]));
