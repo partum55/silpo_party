@@ -20,7 +20,7 @@ import { fallbackShoppingRoute, routeMessage, type ProductOp, type Route } from 
 import type { CatalogSession } from "../silpo/catalog.ts";
 import { unlimitedDeadline, type Deadline } from "./deadline.ts";
 import { addProducts, findPlanProducts, finishPlan, removeRows, setRowQuantity, toPlanProduct } from "./plan-builder.ts";
-import { resolveItems, type ItemNeed, type ResolveResult, type ResolvedItem, type UnresolvedItem } from "./resolve-items.ts";
+import { hasBrand, resolveItems, type ItemNeed, type ResolveResult, type ResolvedItem, type UnresolvedItem } from "./resolve-items.ts";
 import { buildResponseText, formatUah, type TurnReport } from "./response.ts";
 
 export type TurnDeps = {
@@ -114,6 +114,7 @@ function productNeed(op: ProductOp, index: number, assignedMemberIds: string[], 
     label: op.label,
     query: op.query,
     altQueries: op.altQueries,
+    ...(op.brand ? { brand: op.brand, query: hasBrand(op.query, op.brand) ? op.query : `${op.query} ${op.brand}` } : {}),
     requested: { count: op.count, amount: op.amount, unit: op.unit },
     assignedMemberIds,
     requestKey: requestKey ?? `item:${normalizeKey(op.query)}`,

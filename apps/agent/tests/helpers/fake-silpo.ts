@@ -14,6 +14,10 @@ export type FakeProduct = {
 };
 
 export const catalog: Record<string, FakeProduct[]> = {
+  "гель для душу": [
+    { id: "p-palmolive", externalProductId: 701, slug: "gel-palmolive", name: "Гель для душу Palmolive з ожиною", price: 99, ratio: "шт", companyId: "c1" },
+    { id: "p-oldspice", externalProductId: 702, slug: "gel-old-spice", name: "Гель для душу-шампунь Old Spice 2в1 Bearglove", price: 169, ratio: "шт", companyId: "c1" },
+  ],
   // The live search is fuzzy: for "шампури" (skewers) it ranks shampoo first.
   "шампури": [
     { id: "p-shampoo", externalProductId: 601, slug: "shampun", name: "Шампунь проти лупи Head & Shoulders", price: 189, ratio: "шт", companyId: "c1" },

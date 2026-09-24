@@ -17,6 +17,8 @@ export type ItemNeed = {
   /** Short catalog search term. */
   query: string;
   altQueries?: string[];
+  /** Brand the user named; only products whose name contains it are candidates. */
+  brand?: string;
   requested?: RequestedAmount;
   assignedMemberIds: string[];
 };
@@ -31,7 +33,7 @@ export type ResolvedItem = {
   via: "learned" | "llm" | "top";
 };
 
-export type UnresolvedReason = "no_results" | "no_match" | "unavailable" | "no_details" | "mcp_error" | "timeout";
+export type UnresolvedReason = "no_results" | "no_brand" | "no_match" | "unavailable" | "no_details" | "mcp_error" | "timeout";
 
 export type UnresolvedItem = { need: ItemNeed; reason: UnresolvedReason; suggestions: string[] };
 
@@ -61,6 +63,7 @@ const pickSchema = z.object({
 
 const PICK_INSTRUCTIONS = `For each shopping need, choose the catalog candidate that is genuinely the requested item.
 Match the actual kind of product and its everyday use, not a shared word: "картопля" is raw potatoes, not potato chips; "апельсиновий сік" is orange juice, not an orange-flavoured soda; "желейки" are jelly candies.
+When the request names a specific product line, flavour, or size, choose only a candidate that matches it.
 Prefer the ordinary supermarket form, a sensible package for the requested amount, and a lower price when candidates are otherwise equivalent.
 Return {"choices": [{"key": string, "index": number|null}]} with one entry per need; index refers to that need's candidates list. Use null only when no candidate is the requested item.`;
 
@@ -93,6 +96,13 @@ export function namesQuery(product: Pick<CatalogProduct, "name">, query: string)
   const name = normalizeKey(product.name);
   return normalizeKey(query).split(" ").filter((word) => word.length > 2)
     .every((word) => name.includes(word.length >= 7 ? word.slice(0, -1) : word));
+}
+
+const compact = (value: string) => normalizeKey(value).replace(/\s+/g, "");
+
+/** Whether a product name contains the brand, ignoring case, spaces, and punctuation ("Coca-Cola" ~ "COCA COLA"). */
+export function hasBrand(name: string, brand: string) {
+  return compact(name).includes(compact(brand));
 }
 
 function describeCandidate(product: CatalogProduct) {
@@ -175,10 +185,16 @@ export async function resolveItems(needs: ItemNeed[], {
   }
 
   // 2. One batched search for every remaining query variant.
-  const queriesFor = (need: ItemNeed) => [need.query, ...(need.altQueries ?? [])].filter((query) => query.trim());
+  // With a brand, the brand alone is searched too: the live search returns nothing for some combined queries
+  // ("гель для душу Dove") that the brand alone does match.
+  const queriesFor = (need: ItemNeed) => [...new Set([need.query, ...(need.altQueries ?? []), ...(need.brand ? [need.brand] : [])])]
+    .filter((query) => query.trim());
   const searches = await session.search(pending.flatMap(queriesFor));
+  // A named brand filters the raw hits before the cut, so generic hits from altQueries cannot crowd it out.
+  const matchesFor = (need: ItemNeed, query: string) => (searches.get(query)?.matches ?? [])
+    .filter((match) => !need.brand || hasBrand(match.name ?? "", need.brand));
   const candidatesByNeed = new Map(pending.map((need) => [need.key, interleave(
-    queriesFor(need).map((query) => searches.get(query)?.matches ?? []),
+    queriesFor(need).map((query) => matchesFor(need, query)),
     CANDIDATES_PER_NEED,
   )]));
 
@@ -204,6 +220,13 @@ export async function resolveItems(needs: ItemNeed[], {
   const withoutCandidates = pending.filter((need) => !viableByNeed.get(need.key)?.length);
   for (const need of withoutCandidates) {
     const candidates = candidatesByNeed.get(need.key) ?? [];
+    const otherBrands = need.brand && !candidates.length
+      ? queriesFor(need).flatMap((query) => searches.get(query)?.matches ?? []).flatMap((match) => match.name ?? [])
+      : [];
+    if (otherBrands.length) {
+      unresolved.push({ need, reason: "no_brand", suggestions: [...new Set(otherBrands)].slice(0, 3) });
+      continue;
+    }
     unresolved.push({
       need,
       reason: unresolvedReason(queriesFor(need).map((query) => searches.get(query)), candidates, details),

@@ -19,6 +19,8 @@ export const productOpSchema = z.object({
   unit: measureUnitSchema.nullable().default(null),
   /** Existing plan item (id or name) for remove, set_quantity, and replace. */
   target: z.string().min(1).nullable().default(null),
+  /** Brand the user explicitly named ("Old Spice"); only products of this brand may be bought for it. */
+  brand: z.string().min(1).nullable().default(null),
 });
 
 export const routeSchema = z.object({
@@ -36,6 +38,7 @@ kind: "change" when the message asks to add, remove, or change anything; "questi
 productOps: one entry per product mentioned. "label" repeats the product as the user wrote it (e.g. "апельсиновий сік"); "query" is a short catalog search term in Ukrainian nominative case naming one product (e.g. "сік апельсиновий", "картопля", "цукерки желейні"); "altQueries" are up to two alternative search terms (synonyms or a broader category). Never put quantities, politeness, or event context into query.
 Quantities: "2 кг картоплі" -> amount 2000, unit "g"; "літр молока" -> amount 1000, unit "ml"; "3 пачки масла" or "2 соки" -> count; nothing stated -> count, amount, and unit null.
 Use "remove" or "set_quantity" with target = the plan item's id or name for existing items. "заміни X на Y" / "поміняй X на Y" is ONE productOp: action "replace", target = X (the plan item's id or name), label and query = Y, the new product. Keep brand names the user wrote in query (e.g. "гель для душу Old Spice", "кола Pepsi").
+"brand": only when the user explicitly names a brand or product line for that product, the brand as printed on the package (usually Latin: "Old Spice", "Milka", "Coca-Cola", "Моршинська"); otherwise null. Users often write brands in Cyrillic, lowercase, or inflected: "мілку" -> "Milka" (chocolate, not milk), "олд спайс" -> "Old Spice", "моршинську" -> "Моршинська". Include the brand in query too. Never infer a brand the user did not name.
 Split lists like "желейки, картопля і апельсиновий сік" into separate entries.
 recentMessages is the party chat right before this message, oldest first; agent replies there list what was added, removed, or replaced. Use it only to resolve references in the current message ("поверни як було", "поміняй назад", "ще одну таку", "те саме, що й Оля"), e.g. "поміняй назад" after a replacement is "replace" with target = the product added then and query = the product removed then. Act only on the current message: never repeat or undo earlier requests it does not refer to.`;
 
@@ -100,6 +103,7 @@ export function fallbackShoppingRoute(message: string): Route | null {
       amount: null,
       unit: null,
       target: null,
+      brand: null,
     })),
     dishOps: [],
     planEvent: null,

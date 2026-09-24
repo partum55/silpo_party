@@ -15,6 +15,7 @@ function unresolvedLine({ need, reason, suggestions }: UnresolvedItem) {
   const similar = suggestions.length ? ` Схожі: ${suggestions.map(quoted).join(", ")}.` : "";
   switch (reason) {
     case "no_results": return `${quoted(need.label)} — у Сільпо нічого не знайдено.`;
+    case "no_brand": return `${quoted(need.label)} — у Сільпо не знайшов такого товару ${need.brand ?? "цього бренду"}.${similar}`;
     case "no_match": return `${quoted(need.label)} — не знайшов саме цього товару.${similar}`;
     case "unavailable": return `${quoted(need.label)} — зараз немає в наявності.${similar}`;
     case "timeout": return `${quoted(need.label)} — не встиг обробити, повторіть запит.`;
