@@ -112,21 +112,28 @@ export async function runTurn(rawInput: unknown, deps: TurnDeps): Promise<TurnRe
     members = applied.members;
     plan = applied.plan;
     report.notes.push(...applied.notes);
-    const generated = await Promise.all(applied.newDishes.map(async (dish) => {
+    const generated = await Promise.all(applied.newDishes.map(async ({ dish, servings }) => {
       const eaters = dishMembers(members, dishKey(dish));
-      return { dish, eaters, recipe: await generateRecipe(dish, restrictionsOf(eaters), { llm: deps.llm, cache }) };
+      return { dish, servings, eaters, recipe: await generateRecipe(dish, restrictionsOf(eaters), { llm: deps.llm, cache }) };
     }));
-    for (const { dish, eaters, recipe } of generated) {
+    for (const { dish, servings, eaters, recipe } of generated) {
       if (!recipe) {
         report.notes.push(`Не вдалося скласти рецепт «${dish}». Спробуйте ще раз.`);
         continue;
       }
-      const created = recipeFromGenerated(dish, recipe, eaters);
+      const created = recipeFromGenerated(dish, recipe, eaters, servings);
       plan = { ...plan, recipes: [...plan.recipes, created] };
       newRecipeKeys.add(created.dishKey!);
     }
+    const quantityBefore = new Map(plan.products.flatMap((product) => product.requestKey ? [[product.requestKey, product.quantity] as const] : []));
     const synced = syncIngredientRows(plan);
     plan = synced.plan;
+    // A rescaled recipe changes its ingredient rows in place; report the rows whose package count moved.
+    if (applied.rescaledKeys.size) {
+      report.quantityChanged.push(...plan.products.filter((product) => product.requestKey?.startsWith("ingredient:")
+        && quantityBefore.has(product.requestKey) && quantityBefore.get(product.requestKey) !== product.quantity));
+      for (const key of applied.rescaledKeys) newRecipeKeys.add(key);
+    }
     const pendingKeys = new Set(needs.map((need) => need.requestKey));
     for (const need of synced.needs) {
       if (!pendingKeys.has(need.key)) needs.push({ ...need, requestKey: need.key, reason: "Інгредієнт для рецептів." });

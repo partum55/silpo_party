@@ -187,6 +187,23 @@ test("dinner: members who want the same dish share it and its ingredient quantit
   assert.deepEqual(bacon.assignedMemberIds, ["anna", "bohdan"]);
 });
 
+test("dinner: more servings rescale ingredient rows from the recipe instead of doubling packages", async () => {
+  const fake = createFakeSilpo();
+  const turn = deps(fake, [
+    [ROUTER, (data) => ({ kind: "change", dishOps: [{ action: "add", dish: "карбонара", servings: data.message.includes("3") ? 3 : null }] })],
+    [RECIPE, () => carbonara],
+    [PICK, pickByName],
+  ]);
+  const first = await runTurn(input({ mode: "DINNER", message: "карбонара" }), turn.deps);
+  const bigger = await runTurn(input({ mode: "DINNER", message: "на 3 порції", members: withWishes(first), plan: first.plan }), turn.deps);
+
+  assert.equal(bigger.plan.recipes.length, 1);
+  assert.equal(bigger.plan.recipes[0].servings, 3);
+  // 200 g for 4 servings -> 150 g for three -> still one 150 g pack.
+  assert.equal(bigger.plan.products.find((product) => product.name.startsWith("Бекон"))?.quantity, 1);
+  assert.match(text(bigger), /Рецепт «Паста карбонара» \(3 порц\.\):/);
+});
+
 test("dinner: a removed ingredient is not bought again when recipes change", async () => {
   const fake = createFakeSilpo();
   const turn = deps(fake, [
