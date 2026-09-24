@@ -21,9 +21,16 @@ export function silpoUserId(requestContext: RequestContext) {
   return userId;
 }
 
+// "fast" jobs (parse a message, pick among a few candidates) gain nothing from hidden reasoning, which made
+// DeepSeek take 4-25 s per call. The provider copies these options into the request body.
+const FAST_PROVIDER_OPTIONS = { deepseek: { thinking: { type: "disabled" } } } as const;
+
 const generateText: TextGenerator = async (prompt, { role, signal }) => {
   const agent = role === "smart" ? smartAgent : fastAgent;
-  const response = await agent.generate(prompt, { abortSignal: signal });
+  const response = await agent.generate(prompt, {
+    abortSignal: signal,
+    ...(role === "fast" ? { providerOptions: FAST_PROVIDER_OPTIONS } : {}),
+  });
   // Mastra resolves an aborted call with empty text (finishReason "tripwire") instead of throwing; surface the
   // timeout so the JSON helper reports it as such and does not retry into an already-spent budget.
   signal.throwIfAborted();

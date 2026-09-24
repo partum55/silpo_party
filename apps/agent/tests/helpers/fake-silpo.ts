@@ -14,6 +14,14 @@ export type FakeProduct = {
 };
 
 export const catalog: Record<string, FakeProduct[]> = {
+  // The live search is fuzzy: for "шампури" (skewers) it ranks shampoo first.
+  "шампури": [
+    { id: "p-shampoo", externalProductId: 601, slug: "shampun", name: "Шампунь проти лупи Head & Shoulders", price: 189, ratio: "шт", companyId: "c1" },
+    { id: "p-skewers", externalProductId: 602, slug: "shampury", name: "Шампури бамбукові 30 см 100 шт", price: 45, ratio: "шт", companyId: "c1" },
+  ],
+  "шампур": [
+    { id: "p-shampoo", externalProductId: 601, slug: "shampun", name: "Шампунь проти лупи Head & Shoulders", price: 189, ratio: "шт", companyId: "c1" },
+  ],
   "картопля": [
     { id: "p-potato", externalProductId: 101, slug: "kartoplia-bila", name: "Картопля біла", price: 24.9, ratio: "кг", weighted: true, companyId: "c1" },
     { id: "p-chips", externalProductId: 102, slug: "chypsy-lays", name: "Чипси Lay's картопляні 120 г", price: 59, ratio: "шт", displayRatio: "1 шт", companyId: "c1" },
