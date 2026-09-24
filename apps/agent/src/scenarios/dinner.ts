@@ -37,7 +37,7 @@ export async function generateRecipe(dish: string, { llm, cache }: { llm: Llm; c
   return cache.getOrLoad(`recipe:${dishKey(dish)}`, cacheTtl.recipe, () => llm.json(generatedRecipeSchema, {
     instructions: RECIPE_INSTRUCTIONS,
     role: "smart",
-    timeoutMs: 30_000,
+    timeoutMs: 45_000,
     data: { dish },
   }), { shouldCache: (recipe) => recipe !== null });
 }

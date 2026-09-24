@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "mastra dev --env ../../.env.local",
-    "build": "mastra build && node scripts/fix-mastra-imports.mjs",
+    "build": "npm_config_allow_scripts= mastra build && node scripts/fix-mastra-imports.mjs",
     "start": "node .mastra/output/index.mjs",
     "test": "node --test --experimental-strip-types tests/*.test.ts",
     "typecheck": "tsc --noEmit"
