@@ -284,3 +284,20 @@ test("the router sees the recent chat, labelled relative to the sender, to resol
     { from: "agent", text: "Прибрано:\n• «Картопля біла»" },
   ]);
 });
+
+test("shopping: a replacement that finds only the same product, or nothing, keeps the original", async () => {
+  const fake = createFakeSilpo();
+  const first = deps(fake, [[ROUTER, () => ({ kind: "change", productOps: [add("картопля", "картопля")] })], [PICK, pickByName]]);
+  const before = await runTurn(input({ mode: "SHOPPING", message: "картопля" }), first.deps);
+
+  for (const query of ["картопля", "трюфелі"]) {
+    const replace = deps(fake, [
+      [ROUTER, () => ({ kind: "change", productOps: [{ action: "replace", label: query, query, target: "картопля" }] })],
+      [PICK, pickByName],
+    ]);
+    const output = await runTurn(input({ mode: "SHOPPING", message: `заміни картоплю на ${query}`, currentPlan: before.updatedPlan }), replace.deps);
+    assert.deepEqual(output.updatedPlan?.products.map((product) => [product.name, product.quantity]), [["Картопля біла", 1]]);
+    assert.doesNotMatch(output.responseText, /Прибрано/);
+    assert.match(output.responseText, /Не знайшов іншого товару замість «Картопля біла», тому залишив його\./);
+  }
+});
