@@ -207,7 +207,6 @@ silpo_party/
 │       └── silpo/              # Normalized Silpo gateway
 ├── packages/silpo-mcp/         # OAuth-enabled MCP client and credential encryption
 ├── supabase/migrations/        # Schema, policies, realtime, and database functions
-├── scripts/                    # Deployment/runtime helpers
 └── DESIGN.md                   # Product and interface design direction
 ```
 
