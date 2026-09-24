@@ -1,11 +1,12 @@
 import { getAuthenticatedSilpoMcpClient } from "@silpo-party/silpo-mcp";
 
-import type { HydratedProduct } from "../domain/validation.ts";
+import type { HydratedProduct } from "../domain/plan.ts";
 
-type JsonObject = Record<string, unknown>;
-type SilpoClient = Awaited<ReturnType<typeof getAuthenticatedSilpoMcpClient>>;
+export type JsonObject = Record<string, unknown>;
+export type SilpoClient = Awaited<ReturnType<typeof getAuthenticatedSilpoMcpClient>>;
 export type SilpoToolSchema = { properties?: Record<string, object>; required?: string[] };
-type SilpoToolSchemas = Map<string, SilpoToolSchema>;
+export type SilpoToolSchemas = Map<string, SilpoToolSchema>;
+export type DeliveryContext = Record<"branchId" | "deliveryType" | "timeslotStart" | "timeslotEnd", string>;
 
 const requiredAgentTools = [
   "silpo_get_my_shopping_cart",
@@ -13,12 +14,10 @@ const requiredAgentTools = [
   "silpo_get_time_slots",
   "silpo_find_products_batch",
   "silpo_get_product_details",
-  "silpo_get_similar_products",
-  "silpo_get_replacements",
 ] as const;
 
 const userQueues = new Map<string, Promise<void>>();
-const SILPO_CALL_TIMEOUT_MS = 20_000;
+export const SILPO_CALL_TIMEOUT_MS = 15_000;
 
 export async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -40,15 +39,15 @@ export async function serializeSilpoOperation<T>(userId: string, operation: () =
   try { return await run; } finally { if (userQueues.get(userId) === tail) userQueues.delete(userId); }
 }
 
-const isObject = (value: unknown): value is JsonObject => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+export const isObject = (value: unknown): value is JsonObject => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-function objects(value: unknown): JsonObject[] {
+export function objects(value: unknown): JsonObject[] {
   if (Array.isArray(value)) return value.flatMap(objects);
   if (!isObject(value)) return [];
   return [value, ...Object.values(value).flatMap(objects)];
 }
 
-function field(object: JsonObject, names: string[]) {
+export function field(object: JsonObject, names: string[]) {
   const wanted = new Set(names.map((name) => name.toLocaleLowerCase("uk")));
   return Object.entries(object).find(([key]) => wanted.has(key.toLocaleLowerCase("uk")))?.[1];
 }
@@ -95,7 +94,7 @@ export async function listSilpoToolSchemas(client: Pick<SilpoClient, "listTools"
   return schemas;
 }
 
-const text = (value: unknown) => typeof value === "string" && value.trim() ? value.trim() : null;
+export const text = (value: unknown) => typeof value === "string" && value.trim() ? value.trim() : null;
 
 function number(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -154,17 +153,30 @@ function productCategory(name: string, size: HydratedProduct["packageSize"]) {
     : "food" as const;
 }
 
+const weightUnit = /^(?:кг|kg)$/i;
+
+/**
+ * Normalizes a Silpo product payload. Only id, name, and price are mandatory: every other field has a safe
+ * default so a sparse catalog response degrades a product instead of silently dropping it. Weighted goods
+ * without an explicit measure are priced per kilogram; other products without a measure count as one piece.
+ */
 export function normalizeSilpoProduct(payload: unknown, requestedId: string, fallback?: unknown): HydratedProduct | null {
   const product = objects(payload).find((candidate) => String(field(candidate, ["id"]) ?? "") === requestedId);
   if (!product) return null;
   const id = text(field(product, ["id"]));
   const name = text(field(product, ["name"]));
   const priceUah = number(field(product, ["price"]));
-  const unit = text(field(product, ["ratio"]));
+  if (!id || !name || priceUah === null) {
+    console.warn("normalizeSilpoProduct: dropped product without id, name, or price", { requestedId, name });
+    return null;
+  }
+  const ratio = text(field(product, ["ratio"]));
+  const weighted = field(product, ["weighted"]) === true || Boolean(ratio && weightUnit.test(ratio));
+  const unit = ratio ?? (weighted ? "кг" : "шт");
   const available = field(product, ["available"]);
-  const size = name ? packageSize(field(product, ["displayRatio"]), name) : null;
-  const category = name && size ? productCategory(name, size) : null;
-  if (!id || !name || priceUah === null || !unit || typeof available !== "boolean" || !size || !category) return null;
+  const size = packageSize(field(product, ["displayRatio"]), name)
+    ?? (weighted ? { amount: 1000, unit: "g" as const } : { amount: 1, unit: "piece" as const });
+  const category = productCategory(name, size);
   const imageUrl = productImageUrl(product, fallback);
 
   return {
@@ -173,8 +185,8 @@ export function normalizeSilpoProduct(payload: unknown, requestedId: string, fal
     ...(imageUrl ? { imageUrl } : {}),
     priceUah,
     unit,
-    available,
-    weighted: field(product, ["weighted"]) === true,
+    available: typeof available === "boolean" ? available : true,
+    weighted,
     category,
     packageSize: size,
     metadata: {
@@ -193,7 +205,7 @@ export function extractSearchProductIds(payload: unknown): string[] {
   }))];
 }
 
-function decodeToolResult(result: unknown) {
+export function decodeToolResult(result: unknown) {
   if (!isObject(result)) return result;
   if (result.structuredContent !== undefined) return result.structuredContent;
   if (!Array.isArray(result.content)) return result;
@@ -259,15 +271,28 @@ export function extractFoodRestrictions(payload: unknown): string[] {
   return [...new Map(values.map((value) => [value.toLocaleLowerCase("uk"), value])).values()];
 }
 
-async function call(client: SilpoClient, name: string, args: JsonObject) {
-  return decodeToolResult(await withTimeout(
-    client.callTool({ name, arguments: args }),
-    SILPO_CALL_TIMEOUT_MS,
-    `Silpo tool ${name}`,
-  ));
+/** The subset of the MCP client used for tool calls; lets tests and the connection pool substitute it. */
+export type ToolClient = Pick<SilpoClient, "callTool">;
+
+export class SilpoToolError extends Error {
+  readonly tool: string;
+  constructor(tool: string, message: string) {
+    super(`Silpo tool ${tool} failed: ${message}`);
+    this.tool = tool;
+  }
 }
 
-async function cartContext(client: SilpoClient, schemas: SilpoToolSchemas) {
+export async function call(client: ToolClient, name: string, args: JsonObject, timeoutMs = SILPO_CALL_TIMEOUT_MS) {
+  const result = await withTimeout(client.callTool({ name, arguments: args }), timeoutMs, `Silpo tool ${name}`);
+  // MCP reports tool-level failures in-band. Surface them as errors instead of treating the error text as data.
+  if (isObject(result) && result.isError === true) {
+    const decoded = decodeToolResult({ ...result, structuredContent: undefined });
+    throw new SilpoToolError(name, (typeof decoded === "string" ? decoded : JSON.stringify(decoded)).slice(0, 300));
+  }
+  return decodeToolResult(result);
+}
+
+export async function cartContext(client: ToolClient, schemas: SilpoToolSchemas): Promise<DeliveryContext> {
   const current = await call(client, "silpo_get_my_shopping_cart", {});
   if (!isObject(current) || current.exists !== true || typeof current.shoppingCartId !== "string") {
     throw new Error("An existing Silpo shopping cart is required to search the current catalog.");
@@ -286,7 +311,7 @@ async function cartContext(client: SilpoClient, schemas: SilpoToolSchemas) {
   if (Object.values(context).some((value) => typeof value !== "string" || !value)) {
     throw new Error("Silpo cart is missing branch, delivery, or timeslot context.");
   }
-  const typed = context as Record<"branchId" | "deliveryType" | "timeslotStart" | "timeslotEnd", string>;
+  const typed = context as DeliveryContext;
   const timeslotSchema = schemas.get("silpo_get_time_slots")!;
   // A Silpo cart can retain an expired delivery interval. Product search does not report that context error;
   // it simply returns zero matches for every query. Ask for the branch's current slots without constraining
@@ -329,7 +354,7 @@ async function cartContext(client: SilpoClient, schemas: SilpoToolSchemas) {
   };
 }
 
-async function ensureCart(client: SilpoClient) {
+async function ensureCart(client: ToolClient) {
   const current = await call(client, "silpo_get_my_shopping_cart", {});
   if (isObject(current) && current.exists === true && typeof current.shoppingCartId === "string") {
     return current.shoppingCartId;
@@ -341,7 +366,7 @@ async function ensureCart(client: SilpoClient) {
   return id;
 }
 
-async function fetchCart(client: SilpoClient, shoppingCartId: string) {
+async function fetchCart(client: ToolClient, shoppingCartId: string) {
   const result = await call(client, "silpo_get_shopping_cart_by_id", { shoppingCartId });
   return isObject(result) && isObject(result.cart) ? result.cart : result;
 }
@@ -355,165 +380,27 @@ export function extractCheckoutUrl(cart: unknown): string | null {
 
 export type CartLineItem = { productId: string; companyId: string; branchId: string; quantity: number };
 
-export function createSilpoGateway(userId: string) {
-  let schemasPromise: Promise<SilpoToolSchemas> | null = null;
-  const hydratedProducts = new Map<string, HydratedProduct>();
-  // Cached per gateway instance (i.e. per conversational turn — see conversationalTurn/discoverCandidates/
-  // planAndValidate, each of which creates one gateway). Branch/delivery/timeslot context doesn't change
-  // within a single turn, but cartContext() itself costs 3 sequential Silpo calls — recomputing it on every
-  // single search/hydrate/similar/replacements call (dozens of times per turn) was the dominant source of
-  // agent latency.
-  let contextPromise: ReturnType<typeof cartContext> | null = null;
-
-  async function withClient<T>(operation: (client: SilpoClient, schemas: SilpoToolSchemas) => Promise<T>) {
-    return serializeSilpoOperation(userId, async () => {
-      const client = await getAuthenticatedSilpoMcpClient(userId);
-      try {
-        schemasPromise ??= listSilpoToolSchemas(client).catch((error) => {
-          schemasPromise = null;
-          throw error;
-        });
-        return await operation(client, await schemasPromise);
-      } finally { await client.close(); }
+/**
+ * Builds the real Silpo cart to exactly match `items`: clears whatever is there, then writes every line.
+ * This is the "finalize" write path — the MCP catalog has no atomic checkout tool, only cart-mutation
+ * tools plus a checkout link returned from silpo_get_shopping_cart_by_id (see extractCheckoutUrl).
+ */
+export async function syncCartProducts(client: ToolClient, items: CartLineItem[]) {
+  const shoppingCartId = await ensureCart(client);
+  await call(client, "silpo_clear_shopping_cart", { shoppingCartId });
+  if (items.length) {
+    await call(client, "silpo_add_or_update_cart_products", {
+      shoppingCartId,
+      products: items.map((item) => ({
+        productId: item.productId,
+        companyId: item.companyId,
+        branchId: item.branchId,
+        quantity: item.quantity,
+      })),
     });
   }
-
-  function getContext(client: SilpoClient, schemas: SilpoToolSchemas) {
-    contextPromise ??= cartContext(client, schemas).catch((error) => {
-      contextPromise = null;
-      throw error;
-    });
-    return contextPromise;
-  }
-
-  async function productReference(client: SilpoClient, schemas: SilpoToolSchemas, productId: string) {
-    const context = await getContext(client, schemas);
-    const search = await call(client, "silpo_find_products_batch", { ...context, products: [productId], limit: 10 });
-    const match = objects(search).find((candidate) => String(field(candidate, ["externalProductId"]) ?? "") === productId);
-    if (!match) return null;
-    return {
-      context,
-      match,
-      values: {
-        ...context,
-        slug: text(field(match, ["slug"])),
-        slugs: [text(field(match, ["slug"]))].filter(Boolean),
-        productId: field(match, ["productId", "id"]),
-        productIds: [field(match, ["productId", "id"])],
-        externalProductId: productId,
-        externalProductIds: [productId],
-        companyId: field(match, ["companyId"]),
-      },
-    };
-  }
-
-  return {
-    searchVerified: (queries: string[], limit = 12) => withClient(async (client, schemas) => {
-      const context = await getContext(client, schemas);
-      const searches = await Promise.all(queries.map((query) => call(client, "silpo_find_products_batch", {
-        ...context,
-        products: [query],
-        limit: 10,
-      })));
-      const perQuery = searches.map((search) => objects(search).filter((candidate) => {
-          const externalProductId = field(candidate, ["externalProductId"]);
-          return (typeof externalProductId === "string" || typeof externalProductId === "number")
-            && Boolean(text(field(candidate, ["slug"])));
-        }));
-      const interleaved: JsonObject[] = [];
-      for (let index = 0; interleaved.length < limit && perQuery.some((matches) => index < matches.length); index += 1) {
-        for (const matches of perQuery) {
-          const match = matches[index];
-          if (match && !interleaved.some((candidate) => field(candidate, ["externalProductId"]) === field(match, ["externalProductId"]))) {
-            interleaved.push(match);
-          }
-          if (interleaved.length === limit) break;
-        }
-      }
-      const unique = interleaved.map((match) => [String(field(match, ["externalProductId"])), match] as const);
-      const verified = (await Promise.all(unique.map(async ([lookupProductId, match]) => {
-        try {
-          const details = await call(client, "silpo_get_product_details", {
-            ...context,
-            slug: text(field(match, ["slug"]))!,
-          });
-          const product = normalizeSilpoProduct(details, String(field(match, ["id"]) ?? ""), match);
-          if (!product) return null;
-          const companyId = text(field(match, ["companyId"]));
-          return {
-            lookupProductId,
-            matchedQueries: queries.filter((_, queryIndex) => perQuery[queryIndex]
-              .some((candidate) => field(candidate, ["externalProductId"]) === field(match, ["externalProductId"]))),
-            product: companyId ? { ...product, companyId } : product,
-          };
-        } catch {
-          return null;
-        }
-      }))).flatMap((candidate) => candidate ? [candidate] : []);
-      for (const candidate of verified) hydratedProducts.set(candidate.lookupProductId, candidate.product);
-      return verified;
-    }),
-    search: (query: string) => withClient(async (client, schemas) => call(client, "silpo_find_products_batch", {
-      ...await getContext(client, schemas),
-      products: [query],
-      limit: 10,
-    })),
-    searchProductIds: (query: string) => withClient(async (client, schemas) => extractSearchProductIds(await call(client, "silpo_find_products_batch", {
-      ...await getContext(client, schemas),
-      products: [query],
-      limit: 10,
-    }))),
-    hydrate: (productId: string) => {
-      const cached = hydratedProducts.get(productId);
-      if (cached) return Promise.resolve(cached);
-      return withClient(async (client, schemas) => {
-        const reference = await productReference(client, schemas, productId);
-        const slug = reference && text(reference.values.slug);
-        if (!slug) return null;
-        const details = await call(client, "silpo_get_product_details", { ...reference.context, slug });
-        const normalized = normalizeSilpoProduct(details, String(field(reference.match, ["id"]) ?? ""), reference.match);
-        if (!normalized) return null;
-        const companyId = text(field(reference.match, ["companyId"]));
-        const product = companyId ? { ...normalized, companyId } : normalized;
-        hydratedProducts.set(productId, product);
-        return product;
-      });
-    },
-    similar: (productId: string) => withClient(async (client, schemas) => {
-      const reference = await productReference(client, schemas, productId);
-      return reference
-        ? call(client, "silpo_get_similar_products", toolArguments(schemas.get("silpo_get_similar_products")!, [reference.values, reference.match]))
-        : null;
-    }),
-    replacements: (productId: string) => withClient(async (client, schemas) => {
-      const reference = await productReference(client, schemas, productId);
-      return reference
-        ? call(client, "silpo_get_replacements", toolArguments(schemas.get("silpo_get_replacements")!, [reference.values, reference.match]))
-        : null;
-    }),
-    // Builds the real Silpo cart to exactly match `items`: clears whatever is there, then writes every line.
-    // This is the "finalize" write path — the MCP catalog has no atomic checkout tool, only cart-mutation
-    // tools plus a checkout link returned from silpo_get_shopping_cart_by_id (see extractCheckoutUrl).
-    syncCartProducts: (items: CartLineItem[]) => withClient(async (client) => {
-      const shoppingCartId = await ensureCart(client);
-      await call(client, "silpo_clear_shopping_cart", { shoppingCartId });
-      if (items.length) {
-        await call(client, "silpo_add_or_update_cart_products", {
-          shoppingCartId,
-          products: items.map((item) => ({
-            productId: item.productId,
-            companyId: item.companyId,
-            branchId: item.branchId,
-            quantity: item.quantity,
-          })),
-        });
-      }
-      return fetchCart(client, shoppingCartId);
-    }),
-    getFinalCart: () => withClient(async (client) => fetchCart(client, await ensureCart(client))),
-    // The branchId every cart line item must share when writing via syncCartProducts. Shares the same cache
-    // as search/hydrate, so a finalize that just refreshed every item via hydrate() reuses that context
-    // instead of recomputing it (and stays consistent with whatever branch those refreshes were scoped to).
-    getDeliveryContext: () => withClient(async (client, schemas) => getContext(client, schemas)),
-  };
+  return fetchCart(client, shoppingCartId);
+}
+export async function getFinalCart(client: ToolClient) {
+  return fetchCart(client, await ensureCart(client));
 }

@@ -130,6 +130,19 @@ async function processPendingMessages(db: Db, partyId: string, creatorId: string
     const next = pending?.[0];
     if (!next) break;
 
+    // A message queued before the host finalized must not change a cart that is already in Silpo.
+    const current = await getPartyRow(db, partyId);
+    if (current?.status === "COMPLETED") {
+      await db.from("chat_messages").update({ processed_at: new Date().toISOString() }).eq("id", next.id);
+      await db.from("chat_messages").insert({
+        party_id: partyId,
+        sender_type: "AGENT",
+        content: "Вечірку вже завершено — кошик оформлено, тому зміни не вносяться.",
+        reply_to_message_id: next.id,
+      });
+      continue;
+    }
+
     await updateAgentState(db, partyId, {
       agent_status: "THINKING",
       agent_error: null,
