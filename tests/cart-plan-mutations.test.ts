@@ -30,17 +30,15 @@ test("quantity edits preserve per-member shares of the same Silpo SKU and recalc
   assert.equal(next.totalUah, 125);
 });
 
-test("deleting a cart item removes every matching projection and fulfillment reference", () => {
+test("deleting a cart item removes every plan row for that Silpo SKU", () => {
   const plan = {
     products: [product("101", 1, ["one"]), product("101", 2, ["two"]), product("202", 1, ["one"])],
     totalUah: 100,
-    wishFulfillments: [{ selectedProductIds: ["internal-101-one", "internal-202-one"] }],
   };
 
   const next = mutatePlanItem(plan, "101", null)!;
 
   assert.deepEqual(next.products.map((entry) => entry.lookupProductId), ["202"]);
-  assert.deepEqual(next.wishFulfillments?.[0].selectedProductIds, ["internal-202-one"]);
   assert.equal(next.totalUah, 25);
 });
 

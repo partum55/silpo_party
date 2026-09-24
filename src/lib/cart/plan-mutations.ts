@@ -11,9 +11,6 @@ export type MutablePlanProduct = {
 export type MutablePlan = {
   products: MutablePlanProduct[];
   totalUah: number;
-  wishFulfillments?: Array<{
-    selectedProductIds: string[];
-  }>;
 } | null;
 
 const money = (value: number) => Math.round(value * 100) / 100;
@@ -66,25 +63,15 @@ export function mutatePlanItem(plan: MutablePlan, productId: string, quantity: n
       : product.priceUah;
     return [{ ...product, quantity: nextQuantity, lineTotalUah: money(unitTotal * nextQuantity) }];
   });
-  const remainingIds = new Set(nextProducts.map((product) => product.id));
-  const removedIds = new Set(matching.map((product) => product.id).filter((id) => !remainingIds.has(id)));
   const totalUah = money(nextProducts.reduce(
     (sum, product) => sum + (product.lineTotalUah ?? product.priceUah * product.quantity),
     0,
   ));
 
-  return {
-    ...plan,
-    products: nextProducts,
-    totalUah,
-    wishFulfillments: plan.wishFulfillments?.map((fulfillment) => ({
-      ...fulfillment,
-      selectedProductIds: fulfillment.selectedProductIds.filter((id) => !removedIds.has(id)),
-    })),
-  };
+  return { ...plan, products: nextProducts, totalUah };
 }
 
-/** Same identity as the agent's plan rows (apps/agent/src/pipeline/plan-builder.ts rowKey). */
+/** Same identity as the agent's plan rows (packages/agent/src/turn/plan-builder.ts rowKey). */
 const rowKey = (product: MutablePlanProduct) => `${productKey(product)}|${[...new Set(product.assignedMemberIds)].sort().join(",")}`;
 const lineTotal = (product: MutablePlanProduct) => product.lineTotalUah ?? product.priceUah * product.quantity;
 
