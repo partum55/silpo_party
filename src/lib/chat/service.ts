@@ -109,7 +109,7 @@ async function updateAgentState(
   if (result.error) throw result.error;
 }
 
-type PendingMessage = { id: string; sender_user_id: string; content: string };
+type PendingMessage = { id: string; sender_user_id: string; content: string; created_at: string };
 
 // Shopping requests belong to one member each, so their turns can run side by side and be merged (rebasePlan).
 // Dinner recipes and event checklists are planned for the whole party, so those turns stay strictly sequential.
@@ -148,7 +148,7 @@ async function processPendingMessages(db: Db, partyId: string, creatorId: string
     if (inFlight.size < limit) {
       let query = db
         .from("chat_messages")
-        .select("id, sender_user_id, content")
+        .select("id, sender_user_id, content, created_at")
         .eq("party_id", partyId)
         .eq("sender_type", "USER")
         .is("processed_at", null)
@@ -220,6 +220,7 @@ async function processMessage(
       creatorId,
       actorId: next.sender_user_id,
       message: next.content,
+      sentAt: next.created_at,
     });
     await serialized(() => saveTurn(db, partyId, next.id, result, parallel ? basePlan : undefined));
   } catch (turnError) {

@@ -21,6 +21,12 @@ export const conversationInputSchema = z.object({
   scope: z.enum(["preferences", "plan", "auto"]).default("auto"),
   currentParty: z.object({ members: z.array(memberSchema).max(10) }),
   currentPlan: planSchema.nullable().default(null),
+  // The party chat right before `message`, oldest first, so references like "поверни як було" can be resolved.
+  recentMessages: z.array(z.object({
+    from: z.enum(["member", "agent"]),
+    memberId: z.string().nullable().default(null),
+    text: z.string(),
+  })).max(20).default([]),
   budgetUah: z.number().nonnegative().nullable().default(null),
   partyWideRestrictions: z.array(z.string()).default([]),
   blockers: z.array(blockerSchema).default([]),

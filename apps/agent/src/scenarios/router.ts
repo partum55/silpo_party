@@ -36,7 +36,8 @@ kind: "change" when the message asks to add, remove, or change anything; "questi
 productOps: one entry per product mentioned. "label" repeats the product as the user wrote it (e.g. "апельсиновий сік"); "query" is a short catalog search term in Ukrainian nominative case naming one product (e.g. "сік апельсиновий", "картопля", "цукерки желейні"); "altQueries" are up to two alternative search terms (synonyms or a broader category). Never put quantities, politeness, or event context into query.
 Quantities: "2 кг картоплі" -> amount 2000, unit "g"; "літр молока" -> amount 1000, unit "ml"; "3 пачки масла" or "2 соки" -> count; nothing stated -> count, amount, and unit null.
 Use "remove" or "set_quantity" with target = the plan item's id or name for existing items; "replace" means remove target and add the new product described by query.
-Split lists like "желейки, картопля і апельсиновий сік" into separate entries.`;
+Split lists like "желейки, картопля і апельсиновий сік" into separate entries.
+recentMessages is the party chat right before this message, oldest first; agent replies there list what was added, removed, or replaced. Use it only to resolve references in the current message ("поверни як було", "поміняй назад", "ще одну таку", "те саме, що й Оля"), e.g. "поміняй назад" after a replacement is "replace" with target = the product added then and query = the product removed then. Act only on the current message: never repeat or undo earlier requests it does not refer to.`;
 
 const MODE_RULES: Record<TurnInput["mode"], string> = {
   SHOPPING: `Mode SHOPPING: every requested product is a productOp. Never create dishOps or planEvent.`,
@@ -65,6 +66,10 @@ export async function routeMessage(input: TurnInput, llm: Llm): Promise<Route | 
     timeoutMs: 20_000,
     data: {
       message: input.message,
+      recentMessages: input.recentMessages.map(({ from, memberId, text }) => ({
+        from: from === "agent" ? "agent" : memberId === input.actorId ? "this member" : "another member",
+        text,
+      })),
       planItems: planItemsForPrompt(input.currentPlan, input.actorId),
       ...(input.mode === "DINNER" ? {
         actorDishes: (actor?.wishes ?? []).filter((wish) => wish.fulfillmentStrategy === "recipe").map((wish) => wish.text),

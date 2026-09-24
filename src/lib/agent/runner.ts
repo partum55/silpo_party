@@ -33,6 +33,27 @@ async function loadPlan(db: Db, partyId: string) {
   return (data?.plan as unknown as null) ?? null;
 }
 
+// Enough to resolve "поміняй назад" / "ще одну таку"; long event replies are cut so the prompt stays small.
+const RECENT_MESSAGES = 8;
+const RECENT_MESSAGE_CHARS = 600;
+
+/** The party chat right before one message, oldest first, in the agent's recentMessages shape. */
+async function loadRecentMessages(db: Db, partyId: string, before: string) {
+  const { data, error } = await db
+    .from("chat_messages")
+    .select("sender_type, sender_user_id, content")
+    .eq("party_id", partyId)
+    .lt("created_at", before)
+    .order("created_at", { ascending: false })
+    .limit(RECENT_MESSAGES);
+  if (error) throw error;
+  return (data ?? []).reverse().map((row) => ({
+    from: row.sender_type === "AGENT" ? "agent" as const : "member" as const,
+    memberId: (row.sender_user_id as string | null) ?? null,
+    text: (row.content as string).slice(0, RECENT_MESSAGE_CHARS),
+  }));
+}
+
 /**
  * Runs one chat message through the separately-deployed agent (apps/agent; see
  * AGENT_URL) via its Mastra-generated REST API, instead of importing the workflow in-process. Authenticated
@@ -51,16 +72,20 @@ export async function runConversationalTurn(db: Db, {
   creatorId,
   actorId,
   message,
+  sentAt,
 }: {
   partyId: string;
   creatorId: string;
   actorId: string;
   message: string;
+  /** created_at of the message, so only the chat before it is sent as context. */
+  sentAt: string;
 }) {
-  const [members, currentPlan, settings] = await Promise.all([
+  const [members, currentPlan, settings, recentMessages] = await Promise.all([
     loadPartyMembers(db, partyId),
     loadPlan(db, partyId),
     loadPartySettings(db, partyId),
+    loadRecentMessages(db, partyId, sentAt),
   ]);
 
   const response = await fetch(`${env("AGENT_URL")}/api/workflows/conversationalPartyWorkflow/start-async`, {
@@ -78,6 +103,7 @@ export async function runConversationalTurn(db: Db, {
         scope: "auto",
         currentParty: { members },
         currentPlan,
+        recentMessages,
         budgetUah: settings.budgetUah,
         partyWideRestrictions: [],
         blockers: [],

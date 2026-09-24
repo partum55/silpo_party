@@ -261,3 +261,26 @@ test("event: follow-up product requests are shared by all members", async () => 
   const output = await runTurn(input({ mode: "EVENT", message: "додай кетчуп" }), turn.deps);
   assert.deepEqual(output.updatedPlan?.products[0].assignedMemberIds, ["anna", "bohdan"]);
 });
+
+test("the router sees the recent chat, labelled relative to the sender, to resolve references", async () => {
+  const fake = createFakeSilpo();
+  let seen: unknown = null;
+  const { deps: turnDeps } = deps(fake, [
+    [ROUTER, (data) => { seen = data.recentMessages; return { kind: "change", productOps: [add("картопля", "картопля")] }; }],
+    [PICK, pickByName],
+  ]);
+  await runTurn(input({
+    mode: "SHOPPING",
+    message: "поверни як було",
+    recentMessages: [
+      { from: "member", memberId: "anna", text: "заміни картоплю на буряк" },
+      { from: "member", memberId: "bohdan", text: "а мені сік" },
+      { from: "agent", text: "Прибрано:\n• «Картопля біла»" },
+    ],
+  }), turnDeps);
+  assert.deepEqual(seen, [
+    { from: "this member", text: "заміни картоплю на буряк" },
+    { from: "another member", text: "а мені сік" },
+    { from: "agent", text: "Прибрано:\n• «Картопля біла»" },
+  ]);
+});
