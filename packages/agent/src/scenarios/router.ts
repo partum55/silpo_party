@@ -26,7 +26,12 @@ const productOpSchema = z.object({
 const routeSchema = z.object({
   kind: z.enum(["change", "question", "off_topic"]),
   productOps: z.array(productOpSchema).max(25).default([]),
-  dishOps: z.array(z.object({ action: z.enum(["add", "remove"]), dish: z.string().min(1) })).max(10).default([]),
+  dishOps: z.array(z.object({
+    action: z.enum(["add", "remove"]),
+    dish: z.string().min(1),
+    /** Portions the user asked for ("борщ на 4", "на 2 порції"); null when not stated. */
+    servings: z.number().int().positive().max(50).nullable().default(null),
+  })).max(10).default([]),
   planEvent: z.object({ brief: z.string().min(1) }).nullable().default(null),
 });
 
@@ -44,7 +49,7 @@ recentMessages is the party chat right before this message, oldest first; agent 
 
 const MODE_RULES: Record<TurnInput["mode"], string> = {
   SHOPPING: `Mode SHOPPING: every requested product is a productOp. When the member asks for things for a dish or occasion without naming products ("щось для шашлику", "інгредієнти для млинців"), add the typical supermarket items one person would buy for it as separate productOps (3-8 items: e.g. meat, vegetables, marinade or sauce, bread), without pantry staples such as salt, pepper, or oil. Never create dishOps or planEvent.`,
-  DINNER: `Mode DINNER: a dish the user wants to cook or eat ("хочу карбонару", "зробимо борщ", "а я плов") is a dishOps entry with the dish name in Ukrainian; "не хочу борщ" / "прибери плов" is dishOps remove. An ordinary standalone product ("додай хліб", "візьми вино") is a productOp. Changing a recipe ingredient ("заміни бекон на курку", "прибери цибулю") is a productOp targeting that ingredient. Never create planEvent.`,
+  DINNER: `Mode DINNER: a dish the user wants to cook or eat ("хочу карбонару", "зробимо борщ", "а я плов") is a dishOps entry with the dish name in Ukrainian; "не хочу борщ" / "прибери плов" is dishOps remove. An ordinary standalone product ("додай хліб", "візьми вино") is a productOp. Changing a recipe ingredient ("заміни бекон на курку", "прибери цибулю") is a productOp targeting that ingredient. A stated portion count sets "servings" on the dishOps add ("борщ на 4" -> servings 4). Changing how many portions an existing recipe makes ("на 2 порції збільш", "зроби борщ на 6") is a dishOps add of that recipe's dish with the new total servings, never set_quantity on its ingredients: package counts are recalculated from the recipe. "servings" is always the total: "на N порцій" (even with "збільш"/"зменш") means N; only "ще N порцій" / "додай N порції" means the recipe's current servings + N. Never create planEvent.`,
   EVENT: `Mode EVENT: a request to plan or re-plan the whole event ("заплануй шашлики на 6", "організуй день народження", or the first description of the event when the plan is empty) is planEvent with brief = the full request. Specific product requests ("додай ще пиво", "прибери соуси") are productOps. Never create dishOps.`,
 };
 
@@ -76,7 +81,7 @@ export async function routeMessage(input: TurnInput, llm: Llm): Promise<Route | 
       planItems: planItemsForPrompt(input.plan, input.actorId),
       ...(input.mode === "DINNER" ? {
         actorDishes: (actor?.wishes ?? []).filter((wish) => wish.fulfillmentStrategy === "recipe").map((wish) => wish.text),
-        recipes: (input.plan?.recipes ?? []).map((recipe) => recipe.title),
+        recipes: (input.plan?.recipes ?? []).map((recipe) => ({ title: recipe.title, servings: recipe.servings })),
       } : {}),
     },
   });

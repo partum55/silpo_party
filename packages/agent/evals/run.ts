@@ -118,6 +118,18 @@ const routeCases: Case[] = [
     },
   },
   {
+    name: "вечеря: зміна порцій іде в servings рецепта, а не кількість товарів",
+    run: async () => {
+      const borscht = { title: "Борщ", dishKey: "борщ", source: "generated", sourceUrl: null, baseServings: 4, servings: 1, assignedMemberIds: ["anna"], ingredients: [], missingIngredients: [], steps: ["Зварити."] };
+      const route = await routeMessage(routeInput("на 2 порції збільш", {
+        mode: "DINNER",
+        members: [{ id: "anna", wishes: [{ id: "w1", text: "борщ", fulfillmentStrategy: "recipe" }] }],
+        plan: { ...plan(planRow("p4", "Перець Верес солодкий стерилізований с/б")), recipes: [borscht] },
+      }), llm);
+      return check(Boolean(route?.dishOps[0]?.servings) && !route?.productOps.some((op) => op.action === "set_quantity"), JSON.stringify(route));
+    },
+  },
+  {
     name: "подія: опис події стає planEvent",
     run: async () => check(Boolean((await routeMessage(routeInput("сплануй шашлики на 6", { mode: "EVENT" }), llm))?.planEvent), "no planEvent"),
   },

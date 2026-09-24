@@ -60,6 +60,8 @@ const recipeSchema = z.object({
   sourceUrl: z.string().nullable(),
   baseServings: z.number().positive(),
   servings: z.number().int().positive(),
+  /** Servings a member asked for ("борщ на 4"); without it, one serving per member who wants the dish. */
+  requestedServings: z.number().int().positive().optional(),
   assignedMemberIds: z.array(z.string()),
   ingredients: z.array(recipeIngredientSchema),
   /** Ingredients for which no Silpo product could be found; the recipe stays usable without them. */

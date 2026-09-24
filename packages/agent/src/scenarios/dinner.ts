@@ -43,11 +43,12 @@ export async function generateRecipe(dish: string, restrictions: string[], { llm
   }), { shouldCache: (recipe) => recipe !== null });
 }
 
-type DishOp = { action: "add" | "remove"; dish: string };
+type DishOp = { action: "add" | "remove"; dish: string; servings?: number | null };
 
 /**
  * Applies dish requests to the actor's wishes and to recipe membership. A dish another member already
- * requested is shared: the actor joins that recipe instead of creating a duplicate.
+ * requested is shared: the actor joins that recipe instead of creating a duplicate. An add with servings sets
+ * the recipe's portion count, so "на 2 порції" rescales ingredients instead of doubling packages.
  */
 export function applyDishOps({
   members: initialMembers,
@@ -64,7 +65,8 @@ export function applyDishOps({
 }) {
   let members = initialMembers;
   let recipes = plan.recipes;
-  const newDishes: string[] = [];
+  const newDishes: Array<{ dish: string; servings?: number }> = [];
+  const rescaledKeys = new Set<string>();
   const notes: string[] = [];
   const recipeFor = (key: string) => recipes.find((recipe) => (recipe.dishKey ?? dishKey(recipe.title)) === key);
 
@@ -84,14 +86,22 @@ export function applyDishOps({
           : member);
       }
       const existing = recipeFor(key);
-      if (existing) {
+      const servings = op.servings ? Math.round(op.servings) : undefined;
+      if (existing && servings && servings !== recipeServings(existing)) {
+        recipes = recipes.map((recipe) => recipe === existing ? {
+          ...recipe,
+          requestedServings: servings,
+          assignedMemberIds: [...new Set([...recipe.assignedMemberIds, actorId])].sort(),
+        } : recipe);
+        rescaledKeys.add(key);
+      } else if (existing) {
         if (!existing.assignedMemberIds.includes(actorId)) {
           recipes = recipes.map((recipe) => recipe === existing ? { ...recipe, assignedMemberIds: [...recipe.assignedMemberIds, actorId].sort() } : recipe);
         } else {
           notes.push(`Страва «${existing.title}» вже є у плані.`);
         }
-      } else if (!newDishes.some((dish) => dishKey(dish) === key)) {
-        newDishes.push(op.dish);
+      } else if (!newDishes.some((item) => dishKey(item.dish) === key)) {
+        newDishes.push({ dish: op.dish, ...(servings ? { servings } : {}) });
       }
       continue;
     }
@@ -111,7 +121,7 @@ export function applyDishOps({
         : recipes.filter((item) => item !== recipe);
     }
   }
-  return { members, plan: { ...plan, recipes }, newDishes, notes };
+  return { members, plan: { ...plan, recipes }, newDishes, rescaledKeys, notes };
 }
 
 /** Members (sorted) who asked for a dish, by its normalized key. */
@@ -122,9 +132,9 @@ export function dishMembers(members: Member[], key: string) {
     .sort();
 }
 
-export function recipeFromGenerated(dish: string, generated: GeneratedRecipe, assignedMemberIds: string[]): VerifiedRecipe {
+export function recipeFromGenerated(dish: string, generated: GeneratedRecipe, assignedMemberIds: string[], requestedServings?: number): VerifiedRecipe {
   const ingredients = generated.ingredients.filter((ingredient) => !isPantryStaple(ingredient.name));
-  const servings = Math.max(1, assignedMemberIds.length);
+  const servings = requestedServings ?? Math.max(1, assignedMemberIds.length);
   return {
     title: generated.title,
     dishKey: dishKey(dish),
@@ -132,6 +142,7 @@ export function recipeFromGenerated(dish: string, generated: GeneratedRecipe, as
     sourceUrl: null,
     baseServings: RECIPE_BASE_SERVINGS,
     servings,
+    ...(requestedServings ? { requestedServings } : {}),
     assignedMemberIds,
     ingredients: [],
     // Every ingredient starts as missing; relinkRecipes attaches the purchased product once it is resolved.
@@ -154,7 +165,7 @@ function ingredientDefinitions(recipe: VerifiedRecipe) {
   ];
 }
 
-const recipeServings = (recipe: VerifiedRecipe) => Math.max(1, recipe.assignedMemberIds.length);
+const recipeServings = (recipe: VerifiedRecipe) => recipe.requestedServings ?? Math.max(1, recipe.assignedMemberIds.length);
 
 type AggregatedIngredient = { key: string; name: string; unit: MeasureUnit; amount: number; memberIds: string[] };
 
