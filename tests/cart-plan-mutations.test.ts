@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mutatePlanItem, orderCartItemsByPlan } from "../src/lib/cart/plan-mutations.ts";
+import { mutatePlanItem, orderCartItemsByPlan, rebasePlan } from "../src/lib/cart/plan-mutations.ts";
 
 function product(id: string, quantity: number, assignedMemberIds: string[]) {
   return {
@@ -53,4 +53,28 @@ test("cart rows keep plan order after quantity updates return them in another da
   ];
 
   assert.deepEqual(orderCartItemsByPlan(rows, products).map((row) => row.product_id), ["101", "202", "303"]);
+});
+
+test("concurrent agent turns from the same snapshot both survive the merge", () => {
+  const base = { products: [], totalUah: 0 };
+  const annaTurn = { products: [product("101", 1, ["anna"])], totalUah: 25 };
+  const bobTurn = { products: [product("202", 2, ["bob"])], totalUah: 50 };
+
+  const afterAnna = rebasePlan(base, annaTurn, base);
+  const afterBob = rebasePlan(base, bobTurn, afterAnna);
+
+  assert.deepEqual(afterBob.products.map((entry) => [entry.lookupProductId, entry.quantity]), [["101", 1], ["202", 2]]);
+  assert.equal(afterBob.totalUah, 75);
+});
+
+test("a turn's additions and removals apply on top of edits made while it ran", () => {
+  const base = { products: [product("101", 1, ["anna"]), product("202", 1, ["anna"])], totalUah: 50 };
+  // Anna asked for one more 101 and to drop 202; meanwhile someone set 101 to 3 in the cart and Bob added 303.
+  const annaTurn = { products: [product("101", 2, ["anna"])], totalUah: 50 };
+  const latest = { products: [product("101", 3, ["anna"]), product("202", 1, ["anna"]), product("303", 1, ["bob"])], totalUah: 125 };
+
+  const merged = rebasePlan(base, annaTurn, latest);
+
+  assert.deepEqual(merged.products.map((entry) => [entry.lookupProductId, entry.quantity]), [["101", 4], ["303", 1]]);
+  assert.equal(merged.totalUah, 125);
 });

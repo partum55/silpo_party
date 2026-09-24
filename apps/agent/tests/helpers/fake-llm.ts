@@ -30,7 +30,7 @@ export function pickByName(data: { needs: Array<{ key: string; request: string; 
     choices: data.needs.map((need) => {
       const stem = need.request.toLocaleLowerCase("uk").slice(0, 5);
       const match = need.candidates.find((candidate) => candidate.name.toLocaleLowerCase("uk").includes(stem)
-        && !/чипси/i.test(candidate.name));
+        && (!/чипси/i.test(candidate.name) || /чипс/i.test(need.request)));
       return { key: need.key, index: match ? match.index : null };
     }),
   };

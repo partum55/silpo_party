@@ -97,5 +97,6 @@ export async function runConversationalTurn(db: Db, {
   if (data.status !== "success") {
     throw new Error(`Agent turn did not complete (status: ${data.status}): ${JSON.stringify(data.error ?? "").slice(0, 500)}`);
   }
-  return data.result;
+  // basePlan is the snapshot this turn started from, so concurrent turns can be merged (see rebasePlan).
+  return { result: data.result, basePlan: currentPlan };
 }

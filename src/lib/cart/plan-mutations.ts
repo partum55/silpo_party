@@ -83,3 +83,38 @@ export function mutatePlanItem(plan: MutablePlan, productId: string, quantity: n
     })),
   };
 }
+
+/** Same identity as the agent's plan rows (apps/agent/src/pipeline/plan-builder.ts rowKey). */
+const rowKey = (product: MutablePlanProduct) => `${productKey(product)}|${[...new Set(product.assignedMemberIds)].sort().join(",")}`;
+const lineTotal = (product: MutablePlanProduct) => product.lineTotalUah ?? product.priceUah * product.quantity;
+
+/**
+ * Three-way merge for turns that ran concurrently: applies what one agent turn changed (base -> result) on top
+ * of the plan as it is now (latest), which may already hold other members' turns or manual cart edits. Rows
+ * the turn added gain quantity, rows it removed are dropped, rows it did not touch keep their latest state.
+ */
+export function rebasePlan<P extends NonNullable<MutablePlan>>(base: P | null, result: P, latest: P | null): P {
+  if (!latest) return result;
+  const before = new Map((base?.products ?? []).map((product) => [rowKey(product), product]));
+  const after = new Map(result.products.map((product) => [rowKey(product), product]));
+  const products = [...latest.products];
+
+  for (const key of before.keys()) {
+    if (after.has(key)) continue;
+    const index = products.findIndex((product) => rowKey(product) === key);
+    if (index >= 0) products.splice(index, 1);
+  }
+  for (const [key, next] of after) {
+    const delta = next.quantity - (before.get(key)?.quantity ?? 0);
+    if (delta === 0) continue;
+    const unitTotal = next.quantity > 0 ? lineTotal(next) / next.quantity : next.priceUah;
+    const index = products.findIndex((product) => rowKey(product) === key);
+    const quantity = (index >= 0 ? products[index].quantity : 0) + delta;
+    const merged = { ...(index >= 0 ? products[index] : {}), ...next, quantity, lineTotalUah: money(unitTotal * quantity) };
+    if (index >= 0 && quantity < 1) products.splice(index, 1);
+    else if (index >= 0) products[index] = merged;
+    else if (quantity >= 1) products.push(merged);
+  }
+
+  return { ...latest, products, totalUah: money(products.reduce((sum, product) => sum + lineTotal(product), 0)) };
+}

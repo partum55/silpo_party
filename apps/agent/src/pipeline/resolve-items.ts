@@ -46,6 +46,9 @@ type LearnedPick = { externalProductId: string; id: string; slug: string | null;
 
 const CANDIDATES_PER_NEED = 4;
 const MIN_LLM_BUDGET_MS = 6_000;
+// Needs per selection call. One call for a whole event checklist (~16 needs, ~8k chars) outran its timeout,
+// and a failed call used to leave every need to the raw top search hit; small parallel calls fail alone.
+const PICK_BATCH_SIZE = 4;
 
 const pickSchema = z.object({
   choices: z.array(z.object({
@@ -77,6 +80,17 @@ function interleave(lists: SearchMatch[][], limit: number) {
     }
   }
   return picked;
+}
+
+/**
+ * Without a model decision, a search hit is only trusted when its name contains every query word (the last
+ * letter of long words trimmed for inflection): the catalog search is fuzzy and ranks "шампунь" first for
+ * "шампури", and "шампу" would still match it, so short words must match whole.
+ */
+export function namesQuery(product: Pick<CatalogProduct, "name">, query: string) {
+  const name = normalizeKey(product.name);
+  return normalizeKey(query).split(" ").filter((word) => word.length > 2)
+    .every((word) => name.includes(word.length >= 7 ? word.slice(0, -1) : word));
 }
 
 function describeCandidate(product: CatalogProduct) {
@@ -196,44 +210,58 @@ export async function resolveItems(needs: ItemNeed[], {
   }
   pending = pending.filter((need) => viableByNeed.get(need.key)?.length);
 
-  // 4. One model call chooses among candidates for all needs; without it, the top search result wins.
-  let choices: Map<string, number | null> | null = null;
-  const needsChoice = pending.some((need) => viableByNeed.get(need.key)!.length > 1);
-  if (llm && needsChoice && deadline.remaining() > MIN_LLM_BUDGET_MS) {
-    const response = await llm.json(pickSchema, {
+  // 4. The model chooses among candidates, in small parallel batches. Single candidates are checked too: a lone
+  // search hit can still be the wrong kind of product.
+  const choices = new Map<string, number | null>();
+  let askedModel = false;
+  if (llm && pending.length && deadline.remaining() > MIN_LLM_BUDGET_MS) {
+    askedModel = true;
+    const batches: ItemNeed[][] = [];
+    for (let index = 0; index < pending.length; index += PICK_BATCH_SIZE) batches.push(pending.slice(index, index + PICK_BATCH_SIZE));
+    const responses = await Promise.all(batches.map((batch) => llm.json(pickSchema, {
       instructions: PICK_INSTRUCTIONS,
       role: "fast",
-      timeoutMs: 15_000,
+      // Measured 4-14 s per batch on deepseek-flash, with outliers past 15 s; batches run side by side and the
+      // turn deadline still caps each call.
+      timeoutMs: 25_000,
       data: {
-        needs: pending.map((need) => ({
+        needs: batch.map((need) => ({
           key: need.key,
           request: need.label,
           ...(need.requested?.amount ? { amount: need.requested.amount, unit: need.requested.unit } : {}),
           candidates: viableByNeed.get(need.key)!.map((product, index) => ({ index, ...describeCandidate(product) })),
         })),
       },
+    })));
+    responses.forEach((response, batchIndex) => {
+      const keys = new Set(batches[batchIndex].map((need) => need.key));
+      for (const choice of response?.choices ?? []) if (keys.has(choice.key)) choices.set(choice.key, choice.index);
     });
-    if (response) choices = new Map(response.choices.map((choice) => [choice.key, choice.index]));
   }
 
   for (const need of pending) {
     const viable = viableByNeed.get(need.key)!;
-    const choice = choices?.get(need.key);
-    if (choices && choice === null) {
-      unresolved.push({ need, reason: "no_match", suggestions: viable.map((product) => product.name).slice(0, 3) });
+    const suggestions = viable.map((product) => product.name).slice(0, 3);
+    const choice = choices.get(need.key);
+    if (choice === null) {
+      unresolved.push({ need, reason: "no_match", suggestions });
       continue;
     }
-    const index = typeof choice === "number" && choice < viable.length ? choice : 0;
-    const product = viable[index];
-    const via = typeof choice === "number" && choice < viable.length ? "llm" as const : "top" as const;
+    const chosen = typeof choice === "number" && choice < viable.length;
+    const product = chosen ? viable[choice] : viable.find((candidate) => namesQuery(candidate, need.query));
+    if (!product) {
+      unresolved.push({ need, reason: askedModel ? "timeout" : "no_match", suggestions });
+      continue;
+    }
     resolved.push({
       need,
       product,
       ...quantityFor(need, product),
       alternatives: viable.filter((candidate) => candidate !== product).sort((left, right) => left.priceUah - right.priceUah),
-      via,
+      via: chosen ? "llm" : "top",
     });
-    if (via === "llm" || viable.length === 1) {
+    // Only a model-confirmed choice is remembered; a fallback guess must not be reused for a day.
+    if (chosen) {
       await cache.set(learnedKey(branchId, need.query), {
         externalProductId: product.lookupProductId,
         id: product.id,

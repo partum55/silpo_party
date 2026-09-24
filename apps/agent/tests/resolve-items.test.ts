@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createCache, createMemoryStore, createNoopCache } from "../src/cache/cache.ts";
-import { resolveItems, type ItemNeed } from "../src/pipeline/resolve-items.ts";
+import { namesQuery, resolveItems, type ItemNeed } from "../src/pipeline/resolve-items.ts";
 import { createCatalogSession } from "../src/silpo/catalog.ts";
 import { createFakeLlm, pickByName } from "./helpers/fake-llm.ts";
 import { createFakeSilpo } from "./helpers/fake-silpo.ts";
@@ -79,6 +79,33 @@ test("without a usable model, the top search result is used", async () => {
   });
   assert.equal(result.resolved[0]?.product.name, "Картопля біла");
   assert.equal(result.resolved[0]?.via, "top");
+});
+
+test("without a usable model, a fuzzy top hit of the wrong kind is skipped for one that names the request", async () => {
+  const fake = createFakeSilpo();
+  const { llm } = createFakeLlm([["For each shopping need", () => null]]);
+  const result = await resolveItems([need("0", "шампури", "шампури")], {
+    session: createCatalogSession({ userId: "host", client: fake.client, schemas: fake.schemas, cache: createNoopCache() }),
+    llm,
+  });
+  assert.equal(result.resolved[0]?.product.name, "Шампури бамбукові 30 см 100 шт");
+});
+
+test("without a usable model, a lone wrong hit is reported instead of added", async () => {
+  const fake = createFakeSilpo();
+  const { llm } = createFakeLlm([["For each shopping need", () => null]]);
+  const result = await resolveItems([need("0", "шампур", "шампур")], {
+    session: createCatalogSession({ userId: "host", client: fake.client, schemas: fake.schemas, cache: createNoopCache() }),
+    llm,
+  });
+  assert.deepEqual(result.resolved, []);
+  assert.deepEqual(result.unresolved.map((item) => item.reason), ["timeout"]);
+});
+
+test("namesQuery tolerates inflection and word order but not a shared prefix", () => {
+  assert.equal(namesQuery({ name: "Вода мінеральна Borjomi" }, "мінеральна вода"), true);
+  assert.equal(namesQuery({ name: "Шампури бамбукові" }, "шампури"), true);
+  assert.equal(namesQuery({ name: "Шампунь проти лупи" }, "шампури"), false);
 });
 
 test("a learned choice skips search and model selection on the next request", async () => {
