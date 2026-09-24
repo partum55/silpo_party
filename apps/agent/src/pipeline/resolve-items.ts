@@ -44,7 +44,9 @@ export type ResolveResult = {
 
 type LearnedPick = { externalProductId: string; id: string; slug: string | null; companyId: string | null; name: string | null };
 
-const CANDIDATES_PER_NEED = 4;
+// Of the up-to-10 search hits per query. 8 instead of 4 lets the model compare more brands, flavours and sizes;
+// measured on a 16-item checklist: +1 s of product-detail calls, pick calls unchanged at ~1 s.
+const CANDIDATES_PER_NEED = 8;
 const MIN_LLM_BUDGET_MS = 6_000;
 // Needs per selection call. One call for a whole event checklist (~16 needs, ~8k chars) outran its timeout,
 // and a failed call used to leave every need to the raw top search hit; small parallel calls fail alone.
