@@ -60,7 +60,7 @@ test("shopping: the reported list is added for the requester with per-item resul
   ]);
   assert.ok(output.updatedPlan?.products.every((product) => product.assignedMemberIds.join() === "anna"));
   assert.ok(output.updatedPlan?.products.every((product) => product.slug));
-  assert.match(output.responseText, /^Додано: «Цукерки желейні Roshen 150 г» ×1, «Картопля біла» 1 кг/);
+  assert.match(output.responseText, /^Додано:\n• «Цукерки желейні Roshen 150 г» ×1\n• «Картопля біла» 1 кг/);
   assert.equal(output.readiness, "ready");
 });
 
@@ -73,7 +73,7 @@ test("shopping: a partial Silpo failure keeps the successful items and explains 
   const output = await runTurn(input({ mode: "SHOPPING", message: "желейки і картопля" }), turnDeps);
 
   assert.deepEqual(output.updatedPlan?.products.map((product) => product.name), ["Картопля біла"]);
-  assert.match(output.responseText, /Не додано: «желейки» — Сільпо не відповів/);
+  assert.match(output.responseText, /Не додано:\n• «желейки» — Сільпо не відповів/);
 });
 
 test("shopping: when the model is down, a plain list is still split and added", async () => {
@@ -96,7 +96,7 @@ test("shopping: removing an item keeps other members' products", async () => {
   const remove = deps(fake, [[ROUTER, () => ({ kind: "change", productOps: [{ action: "remove", label: "картопля", query: "картопля", target: "картопля" }] })]]);
   const output = await runTurn(input({ mode: "SHOPPING", message: "прибери картоплю", currentPlan: afterBohdan.updatedPlan }), remove.deps);
   assert.deepEqual(output.updatedPlan?.products.map((product) => product.assignedMemberIds), [["bohdan"]]);
-  assert.match(output.responseText, /Прибрано: «Картопля біла»/);
+  assert.match(output.responseText, /Прибрано:\n• «Картопля біла»/);
 });
 
 test("a Silpo connection problem is reported once, with an action for the host", async () => {

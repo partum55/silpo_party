@@ -33,29 +33,34 @@ export type TurnReport = {
   totalUah?: number | null;
 };
 
-/** One reply that tells the group exactly what changed and, per item, why anything was not added. */
+const section = (title: string, lines: string[]) => `${title}\n${lines.map((line) => `• ${line}`).join("\n")}`;
+
+/**
+ * One reply that tells the group exactly what changed and, per item, why anything was not added. One item per
+ * line: the chat bubble renders with whitespace-pre-wrap, so this reads as a list without client-side parsing.
+ */
 export function buildResponseText(report: TurnReport) {
   const parts: string[] = [];
   const added = report.added ?? [];
   if (added.length) {
-    parts.push(`Додано: ${added.map(({ product, addedQuantity }) => `${quoted(product.name)} ${formatPurchase(product, addedQuantity)}`).join(", ")}.`);
+    parts.push(section("Додано:", added.map(({ product, addedQuantity }) => `${quoted(product.name)} ${formatPurchase(product, addedQuantity)}`)));
   }
   if (report.quantityChanged?.length) {
-    parts.push(`Змінено кількість: ${report.quantityChanged.map((product) => `${quoted(product.name)} ${formatPurchase(product, product.quantity)}`).join(", ")}.`);
+    parts.push(section("Змінено кількість:", report.quantityChanged.map((product) => `${quoted(product.name)} ${formatPurchase(product, product.quantity)}`)));
   }
   if (report.removed?.length) {
-    parts.push(`Прибрано: ${[...new Set(report.removed.map((product) => product.name))].map(quoted).join(", ")}.`);
+    parts.push(section("Прибрано:", [...new Set(report.removed.map((product) => product.name))].map(quoted)));
   }
   if (report.notFoundInPlan?.length) {
-    parts.push(`У плані немає: ${report.notFoundInPlan.map(quoted).join(", ")}.`);
+    parts.push(section("У плані немає:", report.notFoundInPlan.map(quoted)));
   }
   if (report.unresolved?.length) {
-    parts.push(`Не додано: ${report.unresolved.map(unresolvedLine).join(" ")}`);
+    parts.push(section("Не додано:", report.unresolved.map(unresolvedLine)));
   }
   parts.push(...(report.notes ?? []));
   if (!parts.length) parts.push("План не змінено.");
   if (typeof report.totalUah === "number" && (added.length || report.removed?.length || report.quantityChanged?.length)) {
     parts.push(`Разом у кошику: ${formatUah(report.totalUah)}.`);
   }
-  return parts.join(" ");
+  return parts.join("\n\n");
 }
