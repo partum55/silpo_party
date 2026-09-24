@@ -27,3 +27,13 @@ export function parseRecipeMessage(content: string): ParsedRecipeMessage | null 
   if (!ingredients.length || !steps.length) return null;
   return { prefix, title: header[1], servings: header[2], ingredients, steps, source };
 }
+
+/** Parses an agent reply that may contain several recipes (one per dish added in the same message). */
+export function parseRecipeMessages(content: string): { prefix: string; recipes: ParsedRecipeMessage[] } | null {
+  const start = content.indexOf("Рецепт «");
+  if (start < 0) return null;
+  const blocks = content.slice(start).split(/\n\s*\n(?=Рецепт «)/);
+  const recipes = blocks.map((block) => parseRecipeMessage(block.trim()));
+  if (!recipes.length || recipes.some((recipe) => !recipe)) return null;
+  return { prefix: content.slice(0, start).trim(), recipes: recipes as ParsedRecipeMessage[] };
+}

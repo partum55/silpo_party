@@ -1,9 +1,9 @@
 import "server-only";
 
 import {
-  createSilpoGateway,
   extractCheckoutUrl,
   productLineTotalUah,
+  withCatalogSession,
 } from "@silpo-party/agent/gateway";
 
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -18,6 +18,7 @@ import { formatUnknownError } from "@/lib/errors";
 type PlanProduct = {
   id: string;
   lookupProductId?: string;
+  slug?: string;
   companyId?: string;
   name: string;
   imageUrl?: string;
@@ -323,70 +324,86 @@ export async function finalizeCart(partyId: string, userId: string): Promise<Fin
     partyStatus: (party?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null,
   }));
 
-  const { data: items, error: itemsError } = await db.from("cart_items").select("*").eq("party_id", partyId);
+  const [{ data: items, error: itemsError }, { data: cart, error: cartError }] = await Promise.all([
+    db.from("cart_items").select("*").eq("party_id", partyId),
+    db.from("carts").select("plan").eq("party_id", partyId).maybeSingle(),
+  ]);
   if (itemsError) throw itemsError;
+  if (cartError) throw cartError;
+  // cart_items.product_id is the plan row's lookupProductId; the plan row carries the slug used for refresh.
+  const planProducts = new Map(((cart?.plan as PlanDraft)?.products ?? [])
+    .map((product) => [product.lookupProductId ?? product.id, product] as const));
 
-  const gateway = createSilpoGateway(party!.creator_id);
   try {
     const { error: statusError } = await db.from("parties")
       .update({ agent_status: "UPDATING_CART", agent_error: null })
       .eq("id", partyId);
     if (statusError) throw statusError;
 
-    // Final refresh is all-or-nothing: validate the complete local basket before touching the real Silpo cart.
-    const droppedItems: string[] = [];
-    const refreshed: Array<{
-      product_id: string;
-      silpo_product_id: string;
-      company_id: string;
-      image_url: string | null;
-      quantity: number;
-      price_uah: number;
-      name: string;
-      unit: string;
-      weighted?: boolean;
-      packageSize: PlanProduct["packageSize"];
-      lineTotalUah: number;
-    }> = [];
-    for (const item of items ?? []) {
-      const product = await gateway.hydrate(item.product_id);
-      if (!product || !product.available || !product.companyId) {
-        droppedItems.push(item.name);
-        continue;
+    // One fresh (uncached) Silpo session: live prices and availability, then the real cart write.
+    const { refreshed, droppedItems, checkoutUrl } = await withCatalogSession(party!.creator_id, async (session) => {
+      // Final refresh is all-or-nothing: validate the complete local basket before touching the real Silpo cart.
+      const droppedItems: string[] = [];
+      const refreshed: Array<{
+        product_id: string;
+        silpo_product_id: string;
+        company_id: string;
+        image_url: string | null;
+        quantity: number;
+        price_uah: number;
+        name: string;
+        unit: string;
+        weighted?: boolean;
+        packageSize: PlanProduct["packageSize"];
+        lineTotalUah: number;
+      }> = [];
+      for (const item of items ?? []) {
+        const planned = planProducts.get(item.product_id);
+        const outcome = await session.refresh({
+          id: planned?.id ?? item.product_id,
+          lookupProductId: item.product_id,
+          slug: planned?.slug,
+          name: planned?.name ?? item.name,
+        });
+        const product = outcome.status === "ok" ? outcome.product : null;
+        if (!product || !product.companyId) {
+          droppedItems.push(outcome.status === "unavailable" ? `${item.name} (немає в наявності)` : item.name);
+          continue;
+        }
+        const purchaseUnits = Number(item.quantity);
+        refreshed.push({
+          product_id: item.product_id,
+          silpo_product_id: product.id,
+          company_id: product.companyId,
+          image_url: product.imageUrl ?? item.image_url ?? null,
+          quantity: purchaseUnits,
+          price_uah: product.priceUah,
+          name: product.name,
+          unit: product.unit,
+          weighted: product.weighted,
+          packageSize: product.packageSize,
+          lineTotalUah: productLineTotalUah(product, purchaseUnits),
+        });
       }
-      const purchaseUnits = Number(item.quantity);
-      refreshed.push({
-        product_id: item.product_id,
-        silpo_product_id: product.id,
-        company_id: product.companyId,
-        image_url: product.imageUrl ?? item.image_url ?? null,
-        quantity: purchaseUnits,
-        price_uah: product.priceUah,
-        name: product.name,
-        unit: product.unit,
-        weighted: product.weighted,
-        packageSize: product.packageSize,
-        lineTotalUah: productLineTotalUah(product, purchaseUnits),
-      });
-    }
 
-    if (droppedItems.length) {
-      throw new Error(`Не вдалося додати всі товари: ${droppedItems.join(", ")}. Оновіть кошик і спробуйте ще раз.`);
-    }
+      if (droppedItems.length) {
+        throw new Error(`Не вдалося додати всі товари: ${droppedItems.join(", ")}. Оновіть кошик і спробуйте ще раз.`);
+      }
 
-    const context = await gateway.getDeliveryContext();
-    const lineItems = buildSilpoLineItems(refreshed.map((item) => ({
-      silpoProductId: item.silpo_product_id,
-      companyId: item.company_id,
-      priceUah: item.price_uah,
-      unit: item.unit,
-      weighted: item.weighted,
-      packageSize: item.packageSize,
-      quantity: item.quantity,
-    })), context.branchId);
-    await gateway.syncCartProducts(lineItems);
-    const finalCart = await gateway.getFinalCart();
-    const checkoutUrl = extractCheckoutUrl(finalCart);
+      const context = await session.context();
+      const lineItems = buildSilpoLineItems(refreshed.map((item) => ({
+        silpoProductId: item.silpo_product_id,
+        companyId: item.company_id,
+        priceUah: item.price_uah,
+        unit: item.unit,
+        weighted: item.weighted,
+        packageSize: item.packageSize,
+        quantity: item.quantity,
+      })), context.branchId);
+      await session.syncCart(lineItems);
+      const finalCart = await session.finalCart();
+      return { refreshed, droppedItems, checkoutUrl: extractCheckoutUrl(finalCart) };
+    }, { fresh: true });
 
     const nowIso = new Date().toISOString();
     const { error: deleteError } = await db.from("cart_items").delete().eq("party_id", partyId);

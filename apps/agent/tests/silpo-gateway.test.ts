@@ -19,8 +19,6 @@ const requiredTools = [
   "silpo_get_time_slots",
   "silpo_find_products_batch",
   "silpo_get_product_details",
-  "silpo_get_similar_products",
-  "silpo_get_replacements",
 ];
 
 test("normalizes active food restrictions from Silpo profile responses", () => {
@@ -67,14 +65,14 @@ test("discovers paginated MCP tools and keeps their live input schemas", async (
 
   const schemas = await listSilpoToolSchemas(client);
   assert.deepEqual(cursors, [undefined, "next-page"]);
-  assert.ok(schemas.has("silpo_get_replacements"));
+  assert.ok(schemas.has("silpo_get_product_details"));
 });
 
 test("fails discovery when a required MCP tool is unavailable", async () => {
   const client = { listTools: async () => ({
     tools: requiredTools.slice(0, -1).map((name) => ({ name, inputSchema: { type: "object" as const } })),
   }) } as unknown as Parameters<typeof listSilpoToolSchemas>[0];
-  await assert.rejects(listSilpoToolSchemas(client), /silpo_get_replacements/);
+  await assert.rejects(listSilpoToolSchemas(client), /silpo_get_product_details/);
 });
 
 test("builds MCP arguments only from the discovered schema", () => {
@@ -167,6 +165,26 @@ test("normalizes the real Silpo product-detail shape", () => {
 test("refuses details without an exact matching id or price", () => {
   assert.equal(normalizeSilpoProduct({ id: "other", name: "Product", price: 10 }, "wanted"), null);
   assert.equal(normalizeSilpoProduct({ id: "wanted", name: "Product" }, "wanted"), null);
+});
+
+test("keeps loose weighted produce without a measure, priced per kilogram", () => {
+  const result = normalizeSilpoProduct({ product: {
+    id: "potato",
+    name: "Картопля біла",
+    price: 24.9,
+    ratio: "кг",
+    attributes: {},
+  } }, "potato");
+
+  assert.equal(result?.weighted, true);
+  assert.equal(result?.available, true);
+  assert.deepEqual(result?.packageSize, { amount: 1000, unit: "g" });
+});
+
+test("treats a packaged product without a measure as one piece", () => {
+  const result = normalizeSilpoProduct({ id: "jelly", name: "Цукерки желейні Roshen", price: 38 }, "jelly");
+  assert.equal(result?.unit, "шт");
+  assert.deepEqual(result?.packageSize, { amount: 1, unit: "piece" });
 });
 
 test("uses the search-result image when product details omit it", () => {

@@ -2,26 +2,17 @@ import { Mastra } from "@mastra/core/mastra";
 import { SimpleAuth } from "@mastra/core/server";
 import { VercelDeployer } from "@mastra/deployer-vercel";
 
-import { partyPlannerAgent } from "./party-planner-agent.ts";
+import { fastAgent, smartAgent } from "./party-planner-agent.ts";
 import { conversationalPartyWorkflow } from "./conversational-workflow.ts";
-import { partyPlanningWorkflow } from "./party-planning-workflow.ts";
-import { findRecipeTool } from "./tools/recipe-tool.ts";
-import {
-  silpoGetProductDetails,
-  silpoGetReplacements,
-  silpoGetSimilarProducts,
-  silpoSearchProducts,
-  silpoSearchVerifiedProducts,
-} from "./tools/silpo-tools.ts";
 
 const internalToken = process.env.AGENT_INTERNAL_TOKEN;
 const internalUsers = internalToken
   ? { [internalToken]: { id: "web-backend", name: "Silpo Party Studio", role: "admin" } }
   : {};
 export const mastra = new Mastra({
-  // A chat turn can chain several LLM calls plus Silpo MCP round-trips (schema discovery, cart context,
-  // timeslot check, search, hydrate — repeated per tool call up to maxSteps: 20). That easily exceeds a
-  // default serverless timeout, which would kill the function mid-run and leave the party's agent_status
+  // A chat turn chains several LLM calls plus Silpo MCP round-trips (cart context, batch search, product
+  // details) within a 75-second budget. That can exceed a default serverless timeout, which would kill the
+  // function mid-run and leave the party's agent_status
   // stuck at THINKING forever (the compare-and-swap lock in chat/service.ts only releases from
   // IDLE/DONE/ERROR). The standalone service avoids a serverless invocation deadline.
   //
@@ -32,9 +23,8 @@ export const mastra = new Mastra({
   // Railway/Render start command. So the Vercel deployer is only wired in when building on Vercel itself
   // (which sets VERCEL=1 for both build and runtime); everywhere else the build stays standalone.
   deployer: process.env.VERCEL ? new VercelDeployer({ maxDuration: 300 }) : undefined,
-  agents: { partyPlannerAgent },
-  workflows: { partyPlanningWorkflow, conversationalPartyWorkflow },
-  tools: { silpoSearchProducts, silpoSearchVerifiedProducts, silpoGetProductDetails, silpoGetSimilarProducts, silpoGetReplacements, findRecipeTool },
+  agents: { fastAgent, smartAgent },
+  workflows: { conversationalPartyWorkflow },
   server: {
     // Mastra otherwise applies its 180-second Hono request timeout. A recipe turn can legitimately exceed
     // that while the model searches and hydrates several Silpo ingredients, which surfaced as a local 504.
@@ -53,4 +43,5 @@ export const mastra = new Mastra({
 
 // Re-exported for the root app's cart-finalize flow (apps/agent's package.json "exports" only exposes this
 // entry point, so subpath imports like "@silpo-party/agent/silpo/gateway" would not resolve).
-export { createSilpoGateway, extractCheckoutUrl, type CartLineItem } from "../silpo/gateway.ts";
+export { extractCheckoutUrl, type CartLineItem } from "../silpo/gateway.ts";
+export { withCatalogSession } from "../silpo/catalog.ts";

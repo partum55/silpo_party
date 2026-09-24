@@ -48,67 +48,6 @@ export const memberSchema = z.object({
   status: z.enum(["collecting", "ready"]).default("collecting"),
 });
 
-export const partyPlanningInputSchema = z.object({
-  request: z.string().min(1),
-  mode: planningModeSchema.default("EVENT"),
-  budgetUah: z.number().nonnegative().nullable().default(null),
-  currentParty: z.object({
-    members: z.array(memberSchema).max(10),
-  }),
-});
-
-export const plannerSelectionSchema = z.object({
-  productId: z.string().min(1),
-  productType: z.enum(["food", "drink", "non_food"]).default("food"),
-  // Count of catalog purchase increments/packages, never kilograms or a free-form recipe amount.
-  quantity: z.number().int().positive(),
-  assignedMemberIds: z.array(z.string().min(1)).min(1),
-  reason: z.string().min(1),
-});
-
-export const plannerWishFulfillmentSchema = z.object({
-  memberId: z.string().min(1),
-  wishId: z.string().min(1),
-  resolvedStrategy: z.enum(["ready_made", "recipe"]),
-  selectedProductIds: z.array(z.string().min(1)).default([]),
-  recipeTitle: z.string().min(1).nullable().default(null),
-  fallbackReason: z.enum(["explicit_cooking", "no_candidates", "no_safe_candidate", "poor_match"]).nullable().default(null),
-});
-
-export const recipeUnitSchema = z.enum(["g", "ml", "piece"]);
-
-export const recipeIngredientSchema = z.object({
-  name: z.string().min(1),
-  amount: z.number().positive(),
-  unit: recipeUnitSchema,
-});
-
-export const foundRecipeSchema = z.object({
-  title: z.string().min(1),
-  source: z.literal("web"),
-  sourceUrl: z.string().url(),
-  servings: z.number().int().positive(),
-  ingredients: z.array(recipeIngredientSchema).min(1),
-  steps: z.array(z.string().min(1)).min(1),
-});
-
-export const plannerRecipeSchema = z.object({
-  title: z.string().min(1),
-  source: z.enum(["web", "generated"]),
-  sourceUrl: z.string().url().nullable(),
-  servings: z.number().int().positive(),
-  ingredients: z.array(recipeIngredientSchema.extend({ productId: z.string().min(1) })).min(1),
-  steps: z.array(z.string().min(1)).min(1),
-  assignedMemberIds: z.array(z.string().min(1)).min(1),
-});
-
-export const plannerProposalSchema = z.object({
-  summary: z.string().min(1),
-  selections: z.array(plannerSelectionSchema),
-  recipes: z.array(plannerRecipeSchema).default([]),
-  wishFulfillments: z.array(plannerWishFulfillmentSchema).default([]),
-});
-
 export const blockerSchema = z.object({
   code: z.enum([
     "party_members_required",
@@ -154,10 +93,6 @@ export type WishChange = z.input<typeof wishChangeSchema>;
 export type PlanOperation = z.infer<typeof planOperationSchema>;
 export type ConversationDecision = z.infer<typeof conversationDecisionSchema>;
 export type PartyMember = z.infer<typeof memberSchema>;
-export type PartyPlanningInput = z.input<typeof partyPlanningInputSchema>;
-export type NormalizedPartyPlanningInput = z.output<typeof partyPlanningInputSchema>;
-export type PlannerProposal = z.input<typeof plannerProposalSchema>;
-export type FoundRecipe = z.infer<typeof foundRecipeSchema>;
 export type Blocker = z.infer<typeof blockerSchema>;
 export type Warning = z.infer<typeof warningSchema>;
 export type Question = z.infer<typeof questionSchema>;

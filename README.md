@@ -19,7 +19,7 @@ Silpo Party turns a group conversation into a safe, budget-aware, ready-to-buy S
 The project was built as a Ukrainian-first hackathon product, but its architecture addresses a broader problem: group shopping is not simply product search. It requires coordination, catalog grounding, dietary safety, quantity planning, cost attribution, and a reliable handoff to checkout.
 
 > [!IMPORTANT]
-> Silpo Party treats dietary restrictions as hard constraints. It refreshes each member's restrictions from their Silpo profile for every agent turn and blocks a product assignment when catalog evidence indicates a conflict or does not provide enough information to verify safety. The application is not a substitute for medical advice or checking a product label.
+> Dietary-restriction checks are currently disabled during planning (see [Food-restriction safety model](#food-restriction-safety-model)). Always check product labels; the application is not a substitute for medical advice.
 
 ## The problem
 
@@ -39,7 +39,6 @@ Silpo Party combines these steps into one collaborative workflow while keeping t
 - **Collaborative parties.** Create or join a party by invitation code, with up to 10 participants and clear host/member permissions.
 - **Natural-language planning.** Add products, request dishes, or describe an entire event in Ukrainian through a shared chat.
 - **Three planning modes.** Choose direct shopping, recipe-driven dinner planning, or autonomous event planning.
-- **Restriction-aware selection.** Apply each participant's current Silpo food restrictions only to the products assigned to that participant.
 - **Live Silpo catalog grounding.** Search the active store context, hydrate candidate details, and use real identifiers, prices, package sizes, availability, ingredients, labels, and allergen metadata.
 - **Budget-aware decisions.** Set an optional party budget and let the planner prioritize essentials before extras.
 - **Transparent shared costs.** Attribute products to requesters, let other members opt into a product, and calculate per-person totals deterministically.
@@ -60,10 +59,10 @@ Silpo Party combines these steps into one collaborative workflow while keeping t
 1. A user signs in with Google through Supabase Auth and connects their Silpo account through OAuth 2.1 with PKCE.
 2. The host creates a party, selects its mode and optional budget, then shares the join code.
 3. Members write requests in the shared chat. Messages are persisted immediately and processed sequentially in the background.
-4. For every turn, the web backend loads the authoritative party state and refreshes each member's food restrictions from Silpo.
-5. The Mastra workflow classifies the intent, searches the catalog, hydrates product details, and proposes an incremental update.
-6. Deterministic validation checks membership, assignment scope, availability, quantities, budget, and food-restriction compatibility. An invalid proposal cannot replace the last valid cart.
-7. The accepted plan is stored in Supabase and projected into the collaborative cart. Realtime subscriptions update every open client.
+4. For every turn, the web backend loads the authoritative party state and sends it to the agent service.
+5. A router model turns the message into structured operations for the party's mode: product additions, removals and quantity changes, dishes to cook, or an event brief.
+6. The mode's pipeline builds a list of needs (direct products, combined recipe ingredients, or an event checklist) and resolves them in one catalog pass: a batch search, live product details, and one model call to pick the right candidate for each need. Each need succeeds or fails on its own, with a specific reason.
+7. The updated plan is stored in Supabase and projected into the collaborative cart. Realtime subscriptions update every open client.
 8. When the host finalizes, every product is refreshed again. Only a complete valid basket is written to Silpo; the party is marked complete after synchronization succeeds.
 
 ## Architecture
@@ -89,13 +88,27 @@ The repository root contains the Next.js App Router application. It owns authent
 
 ### Agent service
 
-`apps/agent` is a separately deployable Mastra service. Its conversational workflow interprets incremental chat commands, preserves unaffected parts of an existing plan, invokes Silpo-backed tools, resolves recipes for dinner mode, and returns schema-validated structured output. The service accepts requests only from the web backend through a shared bearer token.
+`apps/agent` is a separately deployable Mastra service. The model never calls tools itself: deterministic code performs every Silpo call, and the model only answers narrow JSON tasks (route a message, pick a product, write a recipe or an event checklist), each validated with Zod and retried once.
+
+| Module | Responsibility |
+| --- | --- |
+| `src/scenarios/router.ts` | Mode-specific message routing, with a deterministic list splitter when the model is unavailable |
+| `src/scenarios/dinner.ts` | Dish wishes, generated recipes, ingredient aggregation across dishes, pantry-staple filtering |
+| `src/scenarios/event.ts` | Autonomous event checklist scaled to the headcount, and budget fitting |
+| `src/pipeline/resolve-items.ts` | Search, details, and candidate selection per need, with per-item failure reasons |
+| `src/pipeline/turn.ts` | One chat turn end to end, within a 75-second budget |
+| `src/silpo/catalog.ts` | One pooled MCP connection per turn, batch search, details by slug, caching |
+| `src/cache` | In-memory L1 plus Supabase `agent_cache` L2 for searches, details, learned product choices, and recipes |
+
+The service accepts requests only from the web backend through a shared bearer token.
 
 ### Silpo MCP integration
 
 `packages/silpo-mcp` implements the authenticated Model Context Protocol client. It handles OAuth discovery, dynamic client information, PKCE, token refresh, MCP transport, and reconnect behavior. Credentials are encrypted with AES-256-GCM before they are stored in Supabase.
 
-The higher-level gateway in `apps/agent/src/silpo/gateway.ts` adapts flexible MCP responses into a stable internal product model and centralizes delivery context, schema discovery, product hydration, restriction normalization, and final cart writes.
+`apps/agent/src/silpo/gateway.ts` adapts flexible MCP responses into a stable internal product model (only id, name, and price are required; loose produce without a measure is priced per kilogram) and holds delivery context, schema discovery, and cart writes. `apps/agent/src/silpo/catalog.ts` builds the per-turn catalog session on top of it.
+
+To inspect live MCP responses, run `apps/agent/scripts/probe-silpo.ts` (instructions in the file). It saves raw catalog responses, without credentials, to `apps/agent/tests/fixtures/silpo/`.
 
 ### Data and realtime layer
 
@@ -120,14 +133,11 @@ Silpo exposes a larger MCP catalog; this application deliberately uses the subse
 | MCP tool | Used for |
 | --- | --- |
 | `silpo_get_my_profile` | Verifying that an OAuth connection can successfully access the user's Silpo account |
-| `silpo_get_my_food_restrictions` | Refreshing every participant's current dietary restrictions before each planning turn |
 | `silpo_get_my_shopping_cart` | Finding the creator's active cart and its current fulfillment context |
 | `silpo_get_shopping_cart_by_id` | Reading branch, delivery, timeslot, and final cart data |
 | `silpo_get_time_slots` | Confirming that the active cart's delivery or pickup slot is still valid |
-| `silpo_find_products_batch` | Searching multiple concrete product needs in the active Silpo catalog context |
-| `silpo_get_product_details` | Hydrating candidates with authoritative product metadata before selection or finalization |
-| `silpo_get_similar_products` | Exposing comparable catalog candidates when an alternative is needed |
-| `silpo_get_replacements` | Exposing replacement candidates for an existing product |
+| `silpo_find_products_batch` | Searching every product need of a turn in one batched call |
+| `silpo_get_product_details` | Live price, availability, and metadata by slug, for candidates and at finalization |
 | `silpo_create_shopping_cart` | Creating a cart when the connected account does not already have one |
 | `silpo_clear_shopping_cart` | Preparing the real cart for an exact final synchronization |
 | `silpo_add_or_update_cart_products` | Writing the validated product identifiers, branch, and quantities into the real Silpo cart |
@@ -136,9 +146,10 @@ Product discovery is context-sensitive: Silpo Party uses the creator's active br
 
 ## Food-restriction safety model
 
-The LLM helps understand intent and compare candidates, but it is not the final authority on safety. Validation is performed in application code after the model proposes a plan.
+> [!NOTE]
+> Restriction checks are currently **not applied** during planning: the web app sends no member restrictions, and the rule set in `apps/agent/src/domain/restrictions.ts` is kept for re-enabling inside candidate selection.
 
-The safety pipeline:
+The rule set was designed as follows:
 
 1. fetches restrictions separately for every party member;
 2. normalizes Silpo's profile response, including known aliases and slugs;
@@ -152,8 +163,9 @@ The validator covers dietary patterns and common exclusion families such as vega
 
 ## Reliability and security
 
-- **Validated structured output.** Zod schemas constrain workflow inputs, operations, products, recipes, blockers, and final plans.
-- **Deterministic plan protection.** An unsafe or malformed incremental proposal does not erase the previously accepted basket.
+- **Validated structured output.** Zod schemas constrain workflow inputs, model answers, products, recipes, and final plans; an invalid model answer is retried once and then degrades instead of failing the turn.
+- **Per-item degradation.** A failed search, missing details, or an unavailable product affects only that item; everything else is added, and the reply names the reason for each item that was not.
+- **Deterministic plan protection.** A turn only adds, removes, or changes the rows it names; the previous basket is never replaced by a failed turn.
 - **Sequential message processing.** Party messages are drained in order under an agent-status lock, including recovery of stale work after an interrupted deployment.
 - **Atomic collaborative edits.** Database functions use expected quantities to detect conflicting cart changes rather than silently overwriting them.
 - **All-or-nothing final refresh.** Every local product is re-hydrated before the real Silpo cart is touched. Missing or unavailable items stop finalization and keep the party active.

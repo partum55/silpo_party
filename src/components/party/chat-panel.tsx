@@ -1,7 +1,7 @@
 import type { RefObject } from "react";
 
 import { SparkleIcon } from "@/components/ui/icons";
-import { parseRecipeMessage, type ParsedRecipeMessage } from "@/lib/chat/recipe-message";
+import { parseRecipeMessages, type ParsedRecipeMessage } from "@/lib/chat/recipe-message";
 
 import type { ChatMessage, Member } from "./types";
 
@@ -139,7 +139,7 @@ export function ChatMessages({
           ? "Агент"
           : displayName(message);
         const repliedTo = message.reply_to_message_id ? messagesById.get(message.reply_to_message_id) : undefined;
-        const recipe = message.sender_type === "AGENT" ? parseRecipeMessage(message.content) : null;
+        const recipe = message.sender_type === "AGENT" ? parseRecipeMessages(message.content) : null;
         return (
           <div key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
             <div className={`${recipe ? "max-w-[96%]" : "max-w-[80%]"} rounded-[var(--radius-md)] px-3.5 py-2 text-sm leading-snug ${bubbleClass(mine, message.sender_type)}`}>
@@ -155,7 +155,7 @@ export function ChatMessages({
               {recipe ? (
                 <>
                   {recipe.prefix && <p className="whitespace-pre-wrap">{recipe.prefix}</p>}
-                  <RecipeCard recipe={recipe} />
+                  {recipe.recipes.map((item, index) => <RecipeCard key={`${item.title}-${index}`} recipe={item} />)}
                 </>
               ) : (
                 <p className="whitespace-pre-wrap">{message.content}</p>
