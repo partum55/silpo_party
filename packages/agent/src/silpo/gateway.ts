@@ -17,7 +17,7 @@ const requiredAgentTools = [
 ] as const;
 
 const userQueues = new Map<string, Promise<void>>();
-export const SILPO_CALL_TIMEOUT_MS = 15_000;
+const SILPO_CALL_TIMEOUT_MS = 15_000;
 
 export async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -39,7 +39,7 @@ export async function serializeSilpoOperation<T>(userId: string, operation: () =
   try { return await run; } finally { if (userQueues.get(userId) === tail) userQueues.delete(userId); }
 }
 
-export const isObject = (value: unknown): value is JsonObject => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const isObject = (value: unknown): value is JsonObject => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 export function objects(value: unknown): JsonObject[] {
   if (Array.isArray(value)) return value.flatMap(objects);
@@ -205,7 +205,7 @@ export function extractSearchProductIds(payload: unknown): string[] {
   }))];
 }
 
-export function decodeToolResult(result: unknown) {
+function decodeToolResult(result: unknown) {
   if (!isObject(result)) return result;
   if (result.structuredContent !== undefined) return result.structuredContent;
   if (!Array.isArray(result.content)) return result;
@@ -274,7 +274,7 @@ export function extractFoodRestrictions(payload: unknown): string[] {
 /** The subset of the MCP client used for tool calls; lets tests and the connection pool substitute it. */
 export type ToolClient = Pick<SilpoClient, "callTool">;
 
-export class SilpoToolError extends Error {
+class SilpoToolError extends Error {
   readonly tool: string;
   constructor(tool: string, message: string) {
     super(`Silpo tool ${tool} failed: ${message}`);

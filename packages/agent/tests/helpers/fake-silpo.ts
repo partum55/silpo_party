@@ -15,7 +15,7 @@ export type FakeProduct = {
   attributes?: Record<string, string>;
 };
 
-export const catalog: Record<string, FakeProduct[]> = {
+const catalog: Record<string, FakeProduct[]> = {
   // For restriction checks: one conflicting, one confirmed safe, and one without any composition data.
   "печиво": [
     { id: "p-nut-cookie", externalProductId: 801, slug: "pechyvo-funduk", name: "Печиво з фундуком", price: 55, attributes: { "Склад": "борошно пшеничне, цукор, горіхи фундук" } },
@@ -82,7 +82,7 @@ export const catalog: Record<string, FakeProduct[]> = {
   ],
 };
 
-export const schemas: SilpoToolSchemas = new Map<string, { properties?: Record<string, object>; required?: string[] }>([
+const schemas: SilpoToolSchemas = new Map<string, { properties?: Record<string, object>; required?: string[] }>([
   ["silpo_get_my_shopping_cart", { properties: {} }],
   ["silpo_get_shopping_cart_by_id", { properties: { shoppingCartId: {} }, required: ["shoppingCartId"] }],
   ["silpo_get_time_slots", { properties: { branchId: {}, deliveryType: {}, limit: {} }, required: ["branchId"] }],

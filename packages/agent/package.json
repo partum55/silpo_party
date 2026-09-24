@@ -9,7 +9,8 @@
   "scripts": {
     "test": "node --test --experimental-strip-types tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "eval": "node --experimental-strip-types evals/run.ts"
+    "eval": "node --experimental-strip-types evals/run.ts",
+    "probe": "node --experimental-strip-types --env-file=../../.env.local scripts/probe-silpo.ts"
   },
   "dependencies": {
     "@ai-sdk/deepseek": "3.0.52",

@@ -8,7 +8,7 @@ import { purchaseQuantity } from "../domain/quantity.ts";
 import type { Llm } from "../llm/llm.ts";
 import type { ItemNeed, ResolvedItem } from "../turn/resolve-items.ts";
 
-export const checklistSchema = z.object({
+const checklistSchema = z.object({
   title: z.string().min(1),
   items: z.array(z.object({
     category: z.string().min(1),

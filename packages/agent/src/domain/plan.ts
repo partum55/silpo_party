@@ -25,7 +25,7 @@ const hydratedProductShape = {
   }),
 };
 
-export const productSchema = z.object({
+const productSchema = z.object({
   ...hydratedProductShape,
   quantity: z.number().positive(),
   assignedMemberIds: z.array(z.string()),
@@ -52,7 +52,7 @@ const missingIngredientSchema = z.object({
   unit: measureUnitSchema,
 });
 
-export const recipeSchema = z.object({
+const recipeSchema = z.object({
   title: z.string(),
   /** Normalized dish request this recipe fulfils; recipes are matched by it across turns. */
   dishKey: z.string().optional(),

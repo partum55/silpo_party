@@ -8,7 +8,7 @@ import { hasBrand, type ItemNeed } from "./resolve-items.ts";
 /** A need this turn will search for, with what its plan row should record. */
 export type PlannedNeed = ItemNeed & { requestKey: string; reason: string; priority?: "essential" | "extra" };
 
-export function productNeed(op: ProductOp, index: number, assignedMemberIds: string[], reason: string, requestKey?: string): PlannedNeed {
+function productNeed(op: ProductOp, index: number, assignedMemberIds: string[], reason: string, requestKey?: string): PlannedNeed {
   // The brand must be in the search query, even when the model left it out ("вода мінеральна" + "Моршинська").
   const query = op.brand && !hasBrand(op.query, op.brand) ? `${op.query} ${op.brand}` : op.query;
   return {

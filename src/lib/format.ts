@@ -11,7 +11,7 @@ const UNIT_UK: Record<"g" | "ml" | "piece", (amount: number) => string> = {
   piece: (amount) => (amount === 1 ? "шт" : "шт"),
 };
 
-export function formatAmountUk(amount: number, unit: "g" | "ml" | "piece") {
+function formatAmountUk(amount: number, unit: "g" | "ml" | "piece") {
   const value = Number.isInteger(amount) ? String(amount) : String(Math.round(amount * 100) / 100);
   return `${value} ${UNIT_UK[unit](amount)}`;
 }

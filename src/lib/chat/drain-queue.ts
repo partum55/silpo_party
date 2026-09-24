@@ -1,5 +1,5 @@
 /** Runs `work` strictly one after another, in call order; a failure does not block later work. */
-export function createSerialQueue() {
+function createSerialQueue() {
   let tail: Promise<unknown> = Promise.resolve();
   return <T>(work: () => Promise<T>) => {
     const run = tail.then(work);

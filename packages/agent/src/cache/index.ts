@@ -1,7 +1,7 @@
 import { createCache, createMemoryStore, createNoopCache, type Cache } from "./cache.ts";
 import { createSupabaseStore } from "./supabase-store.ts";
 
-export { cacheTtl, createCache, createMemoryStore, createNoopCache, normalizeKey, type Cache, type CacheStore } from "./cache.ts";
+export { cacheTtl, createNoopCache, normalizeKey, type Cache } from "./cache.ts";
 
 let shared: Cache | null = null;
 

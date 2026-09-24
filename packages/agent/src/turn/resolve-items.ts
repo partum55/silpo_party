@@ -40,7 +40,7 @@ export type ResolvedItem = {
   via: "learned" | "llm" | "top";
 };
 
-export type UnresolvedItem = { need: ItemNeed; reason: UnresolvedReason; suggestions: string[] };
+type UnresolvedItem = { need: ItemNeed; reason: UnresolvedReason; suggestions: string[] };
 
 export type ResolveResult = {
   resolved: ResolvedItem[];

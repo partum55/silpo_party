@@ -10,7 +10,7 @@ import { purchaseQuantity } from "../domain/quantity.ts";
 import type { Llm } from "../llm/llm.ts";
 import type { ItemNeed } from "../turn/resolve-items.ts";
 
-export const generatedRecipeSchema = z.object({
+const generatedRecipeSchema = z.object({
   title: z.string().min(1),
   ingredients: z.array(z.object({
     name: z.string().min(1),
@@ -30,7 +30,7 @@ Do not suggest a ready-made or semi-finished version of the dish. 3-12 steps.
 If "restrictions" are given (allergies or diets of the people eating it), every ingredient must respect them: leave out or substitute anything that conflicts.`;
 
 export const dishKey = (dish: string) => normalizeKey(dish);
-export const ingredientKey = (name: string, unit: MeasureUnit) => `ingredient:${normalizeKey(name)}:${unit}`;
+const ingredientKey = (name: string, unit: MeasureUnit) => `ingredient:${normalizeKey(name)}:${unit}`;
 
 /** A recipe for a dish, cached per dish and restriction set (a nut-free pesto is a different recipe). */
 export async function generateRecipe(dish: string, restrictions: string[], { llm, cache }: { llm: Llm; cache: Cache }): Promise<GeneratedRecipe | null> {
@@ -159,7 +159,7 @@ const recipeServings = (recipe: VerifiedRecipe) => Math.max(1, recipe.assignedMe
 type AggregatedIngredient = { key: string; name: string; unit: MeasureUnit; amount: number; memberIds: string[] };
 
 /** Sums the same ingredient across every recipe, scaled to how many members want each dish. */
-export function aggregateIngredients(recipes: VerifiedRecipe[]): AggregatedIngredient[] {
+function aggregateIngredients(recipes: VerifiedRecipe[]): AggregatedIngredient[] {
   const aggregated = new Map<string, AggregatedIngredient>();
   for (const recipe of recipes) {
     const scale = recipeServings(recipe) / recipe.baseServings;

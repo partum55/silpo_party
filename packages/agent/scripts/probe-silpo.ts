@@ -2,9 +2,7 @@
  * Probes the live Silpo MCP catalog for one connected user and saves the raw responses as test fixtures.
  * The fixtures contain catalog data only (no tokens), so they are safe to share and commit.
  *
- *   cd apps/agent
- *   SILPO_USER_ID=<supabase user id of a connected host> \
- *     node --experimental-strip-types --env-file=../../.env.local scripts/probe-silpo.ts [query ...]
+ *   SILPO_USER_ID=<supabase user id of a connected host> npm --workspace packages/agent run probe -- [query ...]
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";

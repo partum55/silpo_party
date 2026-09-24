@@ -2,11 +2,11 @@ import { z } from "zod";
 
 import { planSchema, type PartyPlan, type VerifiedProduct, type VerifiedRecipe } from "./plan.ts";
 
-export const planningModeSchema = z.enum(["SHOPPING", "DINNER", "EVENT"]);
+const planningModeSchema = z.enum(["SHOPPING", "DINNER", "EVENT"]);
 export type PlanningMode = z.output<typeof planningModeSchema>;
 
 /** A dish a member wants (dinner mode), stored in `party_members.wishes`. */
-export const wishSchema = z.object({
+const wishSchema = z.object({
   id: z.string().min(1),
   text: z.string().min(1),
   // Wishes saved by the earlier agent may be "ready_made" or "either"; only "recipe" wishes become recipes.
@@ -14,13 +14,13 @@ export const wishSchema = z.object({
 });
 export type Wish = z.output<typeof wishSchema>;
 
-export const memberSchema = z.object({
+const memberSchema = z.object({
   id: z.string().min(1),
   wishes: z.array(wishSchema).default([]),
 });
 export type Member = z.output<typeof memberSchema>;
 
-export const recentMessageSchema = z.object({
+const recentMessageSchema = z.object({
   from: z.enum(["member", "agent"]),
   memberId: z.string().nullable().default(null),
   text: z.string(),

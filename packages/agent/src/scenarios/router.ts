@@ -5,7 +5,7 @@ import type { TurnInput } from "../domain/contract.ts";
 import { measureUnitSchema, type PartyPlan } from "../domain/plan.ts";
 import type { Llm } from "../llm/llm.ts";
 
-export const productOpSchema = z.object({
+const productOpSchema = z.object({
   action: z.enum(["add", "remove", "set_quantity", "replace"]),
   /** What the user called the product, for replies. */
   label: z.string().min(1),
@@ -23,7 +23,7 @@ export const productOpSchema = z.object({
   brand: z.string().min(1).nullable().default(null),
 });
 
-export const routeSchema = z.object({
+const routeSchema = z.object({
   kind: z.enum(["change", "question", "off_topic"]),
   productOps: z.array(productOpSchema).max(25).default([]),
   dishOps: z.array(z.object({ action: z.enum(["add", "remove"]), dish: z.string().min(1) })).max(10).default([]),
@@ -52,7 +52,7 @@ const INSTRUCTIONS = Object.fromEntries(
   (Object.keys(MODE_RULES) as Array<TurnInput["mode"]>).map((mode) => [mode, `${COMMON}\n${MODE_RULES[mode]}`]),
 ) as Record<TurnInput["mode"], string>;
 
-export function planItemsForPrompt(plan: PartyPlan | null, actorId: string) {
+function planItemsForPrompt(plan: PartyPlan | null, actorId: string) {
   return (plan?.products ?? []).map((product) => ({
     id: product.id,
     name: product.name,

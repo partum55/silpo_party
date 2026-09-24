@@ -6,7 +6,7 @@ const money = (value: number) => Math.round(value * 100) / 100;
 const sortedIds = (ids: string[]) => [...new Set(ids)].sort();
 
 /** Identity of a plan row: the same product bought for the same people is one row. */
-export function rowKey(product: Pick<VerifiedProduct, "id" | "lookupProductId" | "assignedMemberIds">) {
+function rowKey(product: Pick<VerifiedProduct, "id" | "lookupProductId" | "assignedMemberIds">) {
   return `${product.lookupProductId ?? product.id}|${sortedIds(product.assignedMemberIds).join(",")}`;
 }
 
@@ -35,7 +35,7 @@ function withQuantity(product: VerifiedProduct, quantity: number): VerifiedProdu
   return { ...product, quantity, lineTotalUah: productLineTotalUah(product, quantity) };
 }
 
-export type PlanChange = { product: VerifiedProduct; addedQuantity: number };
+type PlanChange = { product: VerifiedProduct; addedQuantity: number };
 
 /** Adds products, merging each into an existing row for the same product and people. */
 export function addProducts(plan: PartyPlan, additions: VerifiedProduct[]) {

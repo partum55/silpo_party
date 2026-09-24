@@ -37,7 +37,7 @@ export type DetailsOutcome =
   | { status: "ok" | "unavailable"; product: CatalogProduct; source: "details" | "search" }
   | { status: "not_found" | "error"; error?: string };
 
-export type RefreshTarget = { id: string; lookupProductId?: string; slug?: string; name: string };
+type RefreshTarget = { id: string; lookupProductId?: string; slug?: string; name: string };
 
 export type CatalogSession = {
   context(): Promise<DeliveryContext>;
@@ -68,7 +68,7 @@ function debugLog(label: string, payload: unknown) {
   console.info(`silpo ${label}: ${serialized.slice(0, 4000)}`);
 }
 
-export async function mapLimit<T, R>(items: T[], limit: number, operation: (item: T) => Promise<R>): Promise<R[]> {
+async function mapLimit<T, R>(items: T[], limit: number, operation: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -84,7 +84,7 @@ export async function mapLimit<T, R>(items: T[], limit: number, operation: (item
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 /** Every product-like object in a search payload, deduplicated by Silpo's external product id. */
-export function searchMatches(payload: unknown): SearchMatch[] {
+function searchMatches(payload: unknown): SearchMatch[] {
   const seen = new Set<string>();
   return objects(payload).flatMap((candidate) => {
     const external = field(candidate, ["externalProductId"]);

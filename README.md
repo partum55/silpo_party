@@ -110,7 +110,7 @@ The repository root contains the Next.js App Router application. It owns authent
 
 `packages/agent/src/silpo/gateway.ts` adapts flexible MCP responses into a stable internal product model (only id, name, and price are required; loose produce without a measure is priced per kilogram) and holds delivery context, schema discovery, and cart writes. `packages/agent/src/silpo/catalog.ts` builds the per-turn catalog session on top of it.
 
-To inspect live MCP responses, run `packages/agent/scripts/probe-silpo.ts` (instructions in the file). It saves raw catalog responses, without credentials, to `packages/agent/tests/fixtures/silpo/`.
+To inspect live MCP responses, run `SILPO_USER_ID=<user id> npm --workspace packages/agent run probe -- [query ...]`. It saves raw catalog responses, without credentials, to `packages/agent/tests/fixtures/silpo/`.
 
 ### Data and realtime layer
 

@@ -12,7 +12,7 @@ export interface CacheStore {
   delete(keys: string[]): Promise<void>;
 }
 
-export type CacheLevel = "l1" | "l2" | "both";
+type CacheLevel = "l1" | "l2" | "both";
 
 export type Cache = {
   get<T>(key: string, level?: CacheLevel): Promise<T | undefined>;

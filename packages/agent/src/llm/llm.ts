@@ -6,7 +6,7 @@ import { MIN_MODEL_BUDGET_MS, MODEL_ID } from "../config.ts";
 import { unlimitedDeadline, type Deadline } from "../turn/deadline.ts";
 
 /** "fast" jobs (route a message, pick among a few products) run without hidden reasoning; "smart" ones with it. */
-export type ModelRole = "fast" | "smart";
+type ModelRole = "fast" | "smart";
 
 export type LlmTask = {
   /** Task description, sent as the system prompt after the shared rules. */
