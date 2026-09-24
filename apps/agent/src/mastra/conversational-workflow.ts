@@ -24,6 +24,9 @@ export function silpoUserId(requestContext: RequestContext) {
 const generateText: TextGenerator = async (prompt, { role, signal }) => {
   const agent = role === "smart" ? smartAgent : fastAgent;
   const response = await agent.generate(prompt, { abortSignal: signal });
+  // Mastra resolves an aborted call with empty text (finishReason "tripwire") instead of throwing; surface the
+  // timeout so the JSON helper reports it as such and does not retry into an already-spent budget.
+  signal.throwIfAborted();
   return response.text;
 };
 

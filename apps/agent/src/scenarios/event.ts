@@ -47,7 +47,7 @@ export async function generateChecklist({
   return llm.json(checklistSchema, {
     instructions: CHECKLIST_INSTRUCTIONS,
     role: "smart",
-    timeoutMs: 30_000,
+    timeoutMs: 45_000,
     data: {
       brief,
       participantCount,
