@@ -1,4 +1,4 @@
-import { silpoCartQuantity, type CartLineItem } from "@silpo-party/agent/gateway";
+import { silpoCartQuantity, type CartLineItem } from "@silpo-party/agent";
 
 export type RefreshedCheckoutProduct = {
   silpoProductId: string;

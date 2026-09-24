@@ -1,45 +1,29 @@
 import "server-only";
 
+import { formatReply, type PartyPlan, type TurnResult } from "@silpo-party/agent";
 import { after } from "next/server";
 
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { runConversationalTurn } from "@/lib/agent/runner";
-import { syncCartFromPlan } from "@/lib/cart/service";
-import { rebasePlan, type MutablePlan } from "@/lib/cart/plan-mutations";
-import { formatUahNumber } from "@/lib/format";
+import { rebasePlan } from "@/lib/cart/plan-mutations";
+import { CartChangedError, syncCartFromPlan } from "@/lib/cart/service";
+import { drainQueue, type SerialQueue } from "@/lib/chat/drain-queue";
 import { formatUnknownError } from "@/lib/errors";
-import { assertOk, checkRead, checkSendMessage } from "@/lib/party/rules";
 import { getMemberReady, getMembership, getPartyRow, type Db } from "@/lib/party/access";
-
-function isMissingReplyTrackingColumn(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const value = error as { code?: unknown; message?: unknown };
-  return (value.code === "42703" || value.code === "PGRST204") && typeof value.message === "string"
-    && (value.message.includes("reply_to_message_id") || value.message.includes("active_agent_message_id"));
-}
+import { assertOk, checkRead, checkSendMessage } from "@/lib/party/rules";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export async function listMessages(partyId: string, userId: string) {
   const db = createSupabaseAdminClient();
   const role = await getMembership(db, partyId, userId);
   const party = await getPartyRow(db, partyId);
   assertOk(checkRead({ isMember: Boolean(role), partyStatus: (party?.status as "ACTIVE" | "COMPLETED" | undefined) ?? null }));
-  const result = await db
+  const { data, error } = await db
     .from("chat_messages")
     .select("id, sender_type, sender_user_id, content, reply_to_message_id, created_at")
     .eq("party_id", partyId)
     .order("created_at", { ascending: true });
-  if (!result.error) return result.data ?? [];
-  if (!isMissingReplyTrackingColumn(result.error)) throw result.error;
-
-  // Allows an application deployment to precede the additive migration without taking the entire party
-  // page down. Reply previews activate automatically as soon as the migration is applied.
-  const legacy = await db
-    .from("chat_messages")
-    .select("id, sender_type, sender_user_id, content, created_at")
-    .eq("party_id", partyId)
-    .order("created_at", { ascending: true });
-  if (legacy.error) throw legacy.error;
-  return (legacy.data ?? []).map((message) => ({ ...message, reply_to_message_id: null }));
+  if (error) throw error;
+  return data ?? [];
 }
 
 export async function sendMessage(partyId: string, userId: string, content: string) {
@@ -55,97 +39,74 @@ export async function sendMessage(partyId: string, userId: string, content: stri
     .single();
   if (error) throw error;
 
-  // Runs after this response is sent (Next.js after()) instead of being awaited inline: a full agent turn
-  // can take well over a minute, and the client shouldn't have to hold a request open that long to find out
-  // it worked — it learns about progress and the result purely through Realtime (chat_messages inserts,
-  // parties.agent_status updates), which is what the page subscribes to. after() keeps the request context alive
-  // until this settles, unlike a bare unawaited call, which is not safe when the process can
-  // freeze right after the response goes out). A message sent while another request already owns processing
-  // returns immediately without draining (see tryAcquireAgentLock) — that owner's own drain loop re-checks
-  // for unprocessed messages before releasing the lock, so this message is still picked up.
+  // The agent runs after this response is sent: a turn takes up to a minute, and the client follows progress
+  // and the reply through Realtime (chat_messages inserts, parties.agent_status). A message sent while another
+  // request already drains the queue returns at once; that drain re-checks for new messages before it ends.
   after(() => processPendingMessagesSafely(db, partyId, party!.creator_id));
   return message;
 }
 
-// runConversationalTurn has a 90-second hard deadline. Anything still locked beyond two minutes was killed
-// between acquiring the lock and recording its error, so a later status poll may safely resume the queue.
+// A turn has a 75-second budget. A lock older than two minutes was left by a process killed mid-turn, so a
+// later status poll may take the queue over.
 const STALE_LOCK_MINUTES = 2;
 
+// Shopping requests belong to one member each, so their turns run side by side and are merged (rebasePlan).
+// Dinner recipes and event checklists plan for the whole party, so those turns stay strictly sequential.
+const MAX_PARALLEL_SHOPPING_TURNS = 4;
+// How often a queue with a free slot looks for messages that arrived while other turns are running.
+const PENDING_POLL_MS = 1_500;
+
+type PendingMessage = { id: string; sender_user_id: string; content: string; created_at: string };
+
+/** parties.agent_status is a compare-and-swap lock: one request drains a party's queue at a time. */
 async function tryAcquireAgentLock(db: Db, partyId: string) {
   const staleBefore = new Date(Date.now() - STALE_LOCK_MINUTES * 60_000).toISOString();
-  let result = await db
+  const { data, error } = await db
     .from("parties")
     .update({ agent_status: "THINKING", agent_error: null, active_agent_message_id: null })
     .eq("id", partyId)
-    .or(`agent_status.in.(IDLE,DONE,ERROR),and(agent_status.in.(THINKING,UPDATING_CART),updated_at.lt.${staleBefore})`)
+    .or(`agent_status.in.(IDLE,DONE,ERROR),and(agent_status.in.(THINKING,SEARCHING,UPDATING_CART),updated_at.lt.${staleBefore})`)
     .select("id")
     .maybeSingle();
-  if (isMissingReplyTrackingColumn(result.error)) {
-    result = await db
-      .from("parties")
-      .update({ agent_status: "THINKING", agent_error: null })
-      .eq("id", partyId)
-      .or(`agent_status.in.(IDLE,DONE,ERROR),and(agent_status.in.(THINKING,UPDATING_CART),updated_at.lt.${staleBefore})`)
-      .select("id")
-      .maybeSingle();
-  }
-  if (result.error) throw result.error;
-  return Boolean(result.data);
+  if (error) throw error;
+  return Boolean(data);
 }
 
 async function updateAgentState(
   db: Db,
   partyId: string,
-  values: { agent_status: string; agent_error?: string | null; active_agent_message_id: string | null },
+  values: { agent_status: string; agent_error?: string | null; active_agent_message_id?: string | null },
 ) {
-  let result = await db.from("parties").update(values).eq("id", partyId);
-  if (isMissingReplyTrackingColumn(result.error)) {
-    const legacyValues = {
-      agent_status: values.agent_status,
-      ...("agent_error" in values ? { agent_error: values.agent_error } : {}),
-    };
-    result = await db.from("parties").update(legacyValues).eq("id", partyId);
-  }
-  if (result.error) throw result.error;
+  const { error } = await db.from("parties").update(values).eq("id", partyId);
+  if (error) throw error;
 }
 
-type PendingMessage = { id: string; sender_user_id: string; content: string; created_at: string };
+async function markProcessed(db: Db, messageId: string) {
+  const { error } = await db.from("chat_messages").update({ processed_at: new Date().toISOString() }).eq("id", messageId);
+  if (error) throw error;
+}
 
-// Shopping requests belong to one member each, so their turns can run side by side and be merged (rebasePlan).
-// Dinner recipes and event checklists are planned for the whole party, so those turns stay strictly sequential.
-const MAX_PARALLEL_SHOPPING_TURNS = 4;
-// How often a worker with free slots looks for messages that arrived while other turns are still running.
-const PENDING_POLL_MS = 1_500;
+async function insertReply(db: Db, partyId: string, messageId: string, content: string) {
+  const { error } = await db.from("chat_messages").insert({
+    party_id: partyId,
+    sender_type: "AGENT",
+    content,
+    reply_to_message_id: messageId,
+  });
+  if (error) throw error;
+}
 
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-/**
- * Drains every unprocessed USER message for a party, so the agent stays "busy" across a burst of messages
- * instead of resetting to idle between each one (spec section 8's batching requirement). Uses
- * parties.agent_status as a compare-and-swap lock, so one worker owns a party's queue (ponytail: no
- * distributed lock; fine for a single-instance MVP). In SHOPPING mode that worker runs up to
- * MAX_PARALLEL_SHOPPING_TURNS agent turns at once; saving their results is serialized and each one is merged
- * onto the latest plan, so concurrent turns never overwrite each other.
- */
 async function processPendingMessages(db: Db, partyId: string, creatorId: string) {
   if (!(await tryAcquireAgentLock(db, partyId))) return;
 
   const { data: settings, error: settingsError } = await db.from("parties").select("mode").eq("id", partyId).single();
   if (settingsError) throw settingsError;
   const parallel = settings.mode === "SHOPPING";
-  const limit = parallel ? MAX_PARALLEL_SHOPPING_TURNS : 1;
 
-  const inFlight = new Map<string, Promise<void>>();
-  let saveQueue: Promise<unknown> = Promise.resolve();
-  const serialized = <T>(work: () => Promise<T>) => {
-    const run = saveQueue.then(work);
-    saveQueue = run.catch(() => undefined);
-    return run;
-  };
-  let lastError: string | null = null;
-
-  for (;;) {
-    if (inFlight.size < limit) {
+  const { lastError } = await drainQueue<PendingMessage>({
+    limit: parallel ? MAX_PARALLEL_SHOPPING_TURNS : 1,
+    pollMs: PENDING_POLL_MS,
+    fetchPending: async (count, running) => {
       let query = db
         .from("chat_messages")
         .select("id, sender_user_id, content, created_at")
@@ -153,142 +114,111 @@ async function processPendingMessages(db: Db, partyId: string, creatorId: string
         .eq("sender_type", "USER")
         .is("processed_at", null)
         .order("created_at", { ascending: true })
-        .limit(limit - inFlight.size);
-      if (inFlight.size) query = query.not("id", "in", `(${[...inFlight.keys()].join(",")})`);
-      const { data: pending, error } = await query;
+        .limit(count);
+      if (running.length) query = query.not("id", "in", `(${running.join(",")})`);
+      const { data, error } = await query;
       if (error) throw error;
-      for (const next of (pending ?? []) as PendingMessage[]) {
-        const run = processMessage(db, partyId, creatorId, next, { parallel, serialized })
-          .catch((turnError) => { lastError = formatUnknownError(turnError); })
-          .finally(() => { inFlight.delete(next.id); });
-        inFlight.set(next.id, run);
-      }
-    }
-    if (!inFlight.size) break;
-    // Wake when a turn finishes, or, while slots are free, to start messages that arrived in the meantime.
-    await Promise.race([...inFlight.values(), ...(inFlight.size < limit ? [delay(PENDING_POLL_MS)] : [])]);
-  }
+      return (data ?? []) as PendingMessage[];
+    },
+    process: (message, serial) => processMessage(db, { partyId, creatorId, message, parallel, serial }),
+  });
 
   await updateAgentState(db, partyId, lastError
-    ? { agent_status: "ERROR", agent_error: lastError, active_agent_message_id: null }
+    ? { agent_status: "ERROR", agent_error: formatUnknownError(lastError), active_agent_message_id: null }
     : { agent_status: "DONE", active_agent_message_id: null });
 
-  // Close the gap between the final empty read and releasing the lock. If a message arrived while the
-  // status was still THINKING, its request could not acquire the lock; after DONE is visible, either this
-  // call or that request will acquire it and drain the message.
-  const { data: racedMessages, error: racedMessagesError } = await db
+  // Close the gap between the last empty read and releasing the lock: a message sent meanwhile could not take
+  // the lock, so drain again if one is waiting.
+  const { data: raced, error: racedError } = await db
     .from("chat_messages")
     .select("id")
     .eq("party_id", partyId)
     .eq("sender_type", "USER")
     .is("processed_at", null)
     .limit(1);
-  if (racedMessagesError) throw racedMessagesError;
-  if (racedMessages?.length) await processPendingMessages(db, partyId, creatorId);
+  if (racedError) throw racedError;
+  if (raced?.length) await processPendingMessages(db, partyId, creatorId);
 }
 
 /** Runs one message through the agent and saves the result. Throws after marking the message processed. */
-async function processMessage(
-  db: Db,
-  partyId: string,
-  creatorId: string,
-  next: PendingMessage,
-  { parallel, serialized }: { parallel: boolean; serialized: <T>(work: () => Promise<T>) => Promise<T> },
-) {
+async function processMessage(db: Db, { partyId, creatorId, message, parallel, serial }: {
+  partyId: string;
+  creatorId: string;
+  message: PendingMessage;
+  parallel: boolean;
+  serial: SerialQueue;
+}) {
   // A message queued before the host finalized must not change a cart that is already in Silpo.
-  const current = await getPartyRow(db, partyId);
-  if (current?.status === "COMPLETED") {
-    await db.from("chat_messages").update({ processed_at: new Date().toISOString() }).eq("id", next.id);
-    await db.from("chat_messages").insert({
-      party_id: partyId,
-      sender_type: "AGENT",
-      content: "Вечірку вже завершено — кошик оформлено, тому зміни не вносяться.",
-      reply_to_message_id: next.id,
-    });
+  const party = await getPartyRow(db, partyId);
+  if (party?.status === "COMPLETED") {
+    await markProcessed(db, message.id);
+    await insertReply(db, partyId, message.id, "Вечірку вже завершено — кошик оформлено, тому зміни не вносяться.");
     return;
   }
 
-  await updateAgentState(db, partyId, {
-    agent_status: "THINKING",
-    agent_error: null,
-    active_agent_message_id: next.id,
-  });
-
+  await updateAgentState(db, partyId, { agent_status: "THINKING", agent_error: null, active_agent_message_id: message.id });
   try {
     const { result, basePlan } = await runConversationalTurn(db, {
       partyId,
       creatorId,
-      actorId: next.sender_user_id,
-      message: next.content,
-      sentAt: next.created_at,
+      actorId: message.sender_user_id,
+      message: message.content,
+      sentAt: message.created_at,
+      reportStatus: (status) => updateAgentState(db, partyId, { agent_status: status, active_agent_message_id: message.id }),
     });
-    await serialized(() => saveTurn(db, partyId, next.id, result, parallel ? basePlan : undefined));
-  } catch (turnError) {
-    // Mark processed even on failure: a permanently-failing message would otherwise wedge the queue forever.
-    await db.from("chat_messages").update({ processed_at: new Date().toISOString() }).eq("id", next.id);
-    throw turnError;
+    await serial(() => saveTurn(db, partyId, message.id, result, parallel ? basePlan as PartyPlan | null : undefined));
+  } catch (error) {
+    // Mark processed even on failure: a permanently failing message would otherwise wedge the queue.
+    await markProcessed(db, message.id);
+    throw error;
   }
 }
 
-type TurnResult = {
-  responseText?: string;
-  updatedPreferences: Array<{ memberId: string; wishes: unknown[] }>;
-  updatedPlan: NonNullable<MutablePlan> | null;
-};
-
 /**
- * Persists one turn. With basePlan (parallel shopping turns) only this turn's own changes are applied to the
- * plan as it is now, and the reply's cart total is updated to the merged plan.
+ * Persists one turn and writes its reply. With a base plan (parallel shopping turns), only this turn's own
+ * changes are applied to the plan as it is now, and the reply states the merged total.
  */
-async function saveTurn(db: Db, partyId: string, messageId: string, result: TurnResult, basePlan?: MutablePlan) {
-  for (const preference of result.updatedPreferences) {
-    const { error: preferenceError } = await db
-      .from("party_members")
-      .update({ wishes: preference.wishes })
-      .eq("party_id", partyId)
-      .eq("user_id", preference.memberId);
-    if (preferenceError) throw preferenceError;
+async function saveTurn(db: Db, partyId: string, messageId: string, result: TurnResult, basePlan?: PartyPlan | null) {
+  for (const { memberId, wishes } of result.changedWishes) {
+    const { error } = await db.from("party_members").update({ wishes }).eq("party_id", partyId).eq("user_id", memberId);
+    if (error) throw error;
   }
 
-  let responseText = result.responseText;
-  if (basePlan === undefined) {
-    await syncCartFromPlan(db, partyId, result.updatedPlan as never);
-  } else if (result.updatedPlan) {
-    const { data: cart, error: cartError } = await db.from("carts").select("plan").eq("party_id", partyId).maybeSingle();
-    if (cartError) throw cartError;
-    const merged = rebasePlan(basePlan, result.updatedPlan, (cart?.plan as MutablePlan) ?? null);
-    await syncCartFromPlan(db, partyId, merged as never);
-    if (responseText && merged.totalUah !== result.updatedPlan.totalUah) {
-      responseText = responseText.replace(/Разом у кошику: [^\n]+ грн\./, `Разом у кошику: ${formatUahNumber(merged.totalUah)} грн.`);
+  let totalUah = result.plan.totalUah;
+  if (result.reply.kind === "changes") {
+    if (basePlan === undefined) await syncCartFromPlan(db, partyId, result.plan as never);
+    else totalUah = await mergeIntoCart(db, partyId, basePlan, result.plan);
+  }
+
+  await markProcessed(db, messageId);
+  await insertReply(db, partyId, messageId, formatReply(result.reply, totalUah));
+}
+
+// A manual cart edit can land between reading the cart and saving the merge; each retry merges on top of it.
+const MERGE_ATTEMPTS = 3;
+
+/** Applies a turn's own changes (basePlan -> plan) on top of the cart as it is now; returns the merged total. */
+async function mergeIntoCart(db: Db, partyId: string, basePlan: PartyPlan | null, plan: PartyPlan) {
+  for (let attempt = 1; ; attempt += 1) {
+    const { data: cart, error } = await db.from("carts").select("plan, updated_at").eq("party_id", partyId).single();
+    if (error) throw error;
+    const merged = rebasePlan(basePlan, plan, cart.plan as PartyPlan | null);
+    try {
+      await syncCartFromPlan(db, partyId, merged as never, cart.updated_at as string);
+      return merged.totalUah;
+    } catch (saveError) {
+      if (!(saveError instanceof CartChangedError) || attempt === MERGE_ATTEMPTS) throw saveError;
     }
   }
-
-  await db.from("chat_messages").update({ processed_at: new Date().toISOString() }).eq("id", messageId);
-  if (!responseText) return;
-  let replyInsert = await db.from("chat_messages").insert({
-    party_id: partyId,
-    sender_type: "AGENT",
-    content: responseText,
-    reply_to_message_id: messageId,
-  });
-  if (isMissingReplyTrackingColumn(replyInsert.error)) {
-    replyInsert = await db.from("chat_messages").insert({ party_id: partyId, sender_type: "AGENT", content: responseText });
-  }
-  if (replyInsert.error) throw replyInsert.error;
 }
 
 async function processPendingMessagesSafely(db: Db, partyId: string, creatorId: string) {
   try {
     await processPendingMessages(db, partyId, creatorId);
   } catch (error) {
-    const message = formatUnknownError(error);
     console.error("Failed to drain party message queue", { partyId, error });
     try {
-      await updateAgentState(db, partyId, {
-        agent_status: "ERROR",
-        agent_error: message,
-        active_agent_message_id: null,
-      });
+      await updateAgentState(db, partyId, { agent_status: "ERROR", agent_error: formatUnknownError(error), active_agent_message_id: null });
     } catch (statusError) {
       console.error("Failed to publish party queue error", { partyId, statusError });
     }

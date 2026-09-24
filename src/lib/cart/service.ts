@@ -4,7 +4,7 @@ import {
   extractCheckoutUrl,
   productLineTotalUah,
   withCatalogSession,
-} from "@silpo-party/agent/gateway";
+} from "@silpo-party/agent";
 
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { assertOk, checkActiveMemberAction, checkFinalize, checkRead } from "@/lib/party/rules";
@@ -77,60 +77,54 @@ function isProjectionRaw(value: unknown): value is ProjectionRaw {
     && ["g", "ml", "piece"].includes(raw.packageSize.unit ?? "");
 }
 
-/** Replaces cart_items with the derived projection of plan.products, and stores the raw plan for continuity. */
-export async function syncCartFromPlan(db: Db, partyId: string, plan: PlanDraft) {
-  const { error: deleteError } = await db.from("cart_items").delete().eq("party_id", partyId);
-  if (deleteError) throw deleteError;
-
-  const grouped = new Map<string, { party_id: string; product_id: string; company_id: string; name: string; image_url: string | null; price_uah: number; quantity: number; raw: ProjectionRaw }>();
+/** cart_items rows for a plan: one per Silpo SKU, summing the plan rows bought for different members. */
+function cartProjection(plan: PlanDraft) {
+  const grouped = new Map<string, { product_id: string; company_id: string; name: string; image_url: string | null; price_uah: number; quantity: number; raw: ProjectionRaw }>();
   for (const product of plan?.products ?? []) {
     const productId = product.lookupProductId ?? product.id;
+    const lineTotalUah = product.lineTotalUah ?? productLineTotalUah(product, product.quantity);
     const existing = grouped.get(productId);
     if (existing) {
       existing.quantity += product.quantity;
       existing.image_url ??= product.imageUrl ?? null;
-      existing.raw.lineTotalUah = Math.round((existing.raw.lineTotalUah + (product.lineTotalUah ?? productLineTotalUah(product, product.quantity))) * 100) / 100;
+      existing.raw.lineTotalUah = Math.round((existing.raw.lineTotalUah + lineTotalUah) * 100) / 100;
+    } else {
+      grouped.set(productId, {
+        product_id: productId,
+        company_id: product.companyId ?? "",
+        name: product.name,
+        image_url: product.imageUrl ?? null,
+        price_uah: product.priceUah,
+        quantity: product.quantity,
+        raw: projectionRaw(product, lineTotalUah),
+      });
     }
-    else grouped.set(productId, {
-      party_id: partyId,
-      product_id: productId,
-      company_id: product.companyId ?? "",
-      name: product.name,
-      image_url: product.imageUrl ?? null,
-      price_uah: product.priceUah,
-      quantity: product.quantity,
-      raw: projectionRaw(product),
-    });
   }
-  const items = [...grouped.values()];
-  if (items.length) {
-    const { error: insertError } = await db.from("cart_items").insert(items);
-    if (insertError) throw insertError;
-  }
+  return [...grouped.values()];
+}
 
-  // Subscriptions survive cart projection rebuilds, but must not return if the agent removes a product.
-  const { data: subscribers, error: subscribersError } = await db
-    .from("cart_item_subscribers")
-    .select("product_id")
-    .eq("party_id", partyId);
-  if (subscribersError) throw subscribersError;
-  const liveProductIds = new Set(items.map((item) => item.product_id));
-  const staleProductIds = [...new Set((subscribers ?? [])
-    .map((row) => row.product_id as string)
-    .filter((productId) => !liveProductIds.has(productId)))];
-  if (staleProductIds.length) {
-    const { error: cleanupError } = await db.from("cart_item_subscribers")
-      .delete()
-      .eq("party_id", partyId)
-      .in("product_id", staleProductIds);
-    if (cleanupError) throw cleanupError;
+export class CartChangedError extends Error {
+  constructor() {
+    super("The cart changed since it was read.");
   }
+}
 
-  const { error: updateError } = await db
-    .from("carts")
-    .update({ plan: plan ?? null, total_uah: plan?.totalUah ?? 0, updated_at: new Date().toISOString() })
-    .eq("party_id", partyId);
-  if (updateError) throw updateError;
+/**
+ * Saves the plan and its cart_items projection in one transaction (replace_cart_projection). With
+ * `expectedUpdatedAt`, the save fails with CartChangedError if the cart changed since it was read at that time.
+ */
+export async function syncCartFromPlan(db: Db, partyId: string, plan: PlanDraft, expectedUpdatedAt: string | null = null) {
+  const { error } = await db.rpc("replace_cart_projection", {
+    p_party_id: partyId,
+    p_expected_updated_at: expectedUpdatedAt,
+    p_plan: plan ?? null,
+    p_total_uah: plan?.totalUah ?? 0,
+    p_items: cartProjection(plan),
+  });
+  if (error) {
+    if (formatUnknownError(error).includes("cart_changed")) throw new CartChangedError();
+    throw error;
+  }
 }
 
 export async function getCart(partyId: string, userId: string) {

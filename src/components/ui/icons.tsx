@@ -64,35 +64,6 @@ export function ChevronDownIcon({ className }: IconProps) {
   );
 }
 
-export function UsersIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={base} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d="M8 12a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
-      <path d="M2.5 20a6 6 0 0 1 11 0" />
-      <path d="M15.5 6.5a3 3 0 1 1 0 6" />
-      <path d="M14.5 13.2A6 6 0 0 1 21.5 19" />
-    </svg>
-  );
-}
-
-export function WalletIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={base} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d="M3 7a2 2 0 0 1 2-2h13a1 1 0 0 1 1 1v3" />
-      <path d="M3 7v11a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1H6a3 3 0 0 1 0-6h12" />
-      <circle cx="16.5" cy="14" r="1.3" />
-    </svg>
-  );
-}
-
-export function XIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={base} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d="M6 6l12 12M18 6 6 18" />
-    </svg>
-  );
-}
-
 export function PlusIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={base} strokeLinecap="round" className={className} aria-hidden>

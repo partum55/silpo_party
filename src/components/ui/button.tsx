@@ -5,8 +5,6 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 import { buttonClasses, type ButtonSize, type ButtonVariant } from "./button-classes";
 
-export { buttonClasses, type ButtonSize, type ButtonVariant };
-
 export function Button({
   variant = "primary",
   size = "md",

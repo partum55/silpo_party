@@ -33,7 +33,7 @@ export type CartItem = {
   subscriber_member_ids: string[];
 };
 
-export type RecipeIngredient = {
+type RecipeIngredient = {
   name: string;
   requiredAmount: number;
   unit: PackageSize["unit"];
