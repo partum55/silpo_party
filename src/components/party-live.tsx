@@ -3,259 +3,140 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
-import { deletePartyAction, finalizeCartAction, leavePartyAction, updatePartyBudgetAction } from "@/app/(authenticated)/parties/actions";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { buildCart } from "@/demo/cart";
+import { ME, type Scenario, type Seed } from "@/demo/scenarios";
 import { MODE_COPY } from "@/lib/party/mode-copy";
 import { AGENT_THINKING_COPY, type AgentStatus } from "@/lib/party/agent-status-copy";
 
 import { ChatMessages } from "@/components/party/chat-panel";
 import { MembersPanel } from "@/components/party/members-panel";
 import { PlanPanel } from "@/components/party/plan-panel";
-import type { Cart, ChatMessage, Member, PartyStatus } from "@/components/party/types";
+import type { ChatMessage, PartyStatus, Recipe } from "@/components/party/types";
 
-import { Button, SubmitButton } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { ModeBadge } from "@/components/ui/mode-badge";
 import { TabBar } from "@/components/ui/tab-bar";
 import { ChatIcon, CheckIcon, ListIcon } from "@/components/ui/icons";
 
-// Everything on this page that can change without this viewer doing anything — a message from someone else,
-// the agent's reply, its status ticking over, a member joining/leaving, the cart being rebuilt — arrives
-// through one Supabase Realtime channel (RLS-scoped: only party members receive events) instead of requiring
-// a page refresh. A periodic full snapshot acts as a reconnect/missed-event fallback.
-// party_members/carts/cart_items/cart_item_subscribers changes are refetched via the existing API routes rather
-// than patched incrementally (simpler and safer given syncCartFromPlan replaces cart_items wholesale, which
-// would otherwise show up as a burst of individual delete+insert events); chat_messages and the parties row
-// itself are cheap to patch directly from the change payload.
-export function PartyLive({
-  partyId,
-  partyName,
-  currentUserId,
-  isCreator,
-  initialTab,
-  initialParty,
-  initialMembers,
-  initialMessages,
-  initialCart,
-}: {
-  partyId: string;
-  partyName: string;
-  currentUserId: string;
-  isCreator: boolean;
-  initialTab: "chat" | "plan";
-  initialParty: PartyStatus;
-  initialMembers: Member[];
-  initialMessages: ChatMessage[];
-  initialCart: Cart;
-}) {
-  const [party, setParty] = useState(initialParty);
-  const [members, setMembers] = useState(initialMembers);
-  const [messages, setMessages] = useState(initialMessages);
-  const [cart, setCart] = useState(initialCart);
+// The demo has no backend: the "agent" replays the scenario's scripted steps. A step runs when its exact prompt
+// is sent (via the suggestion button or typed); anything else gets a canned "demo only" reply and doesn't advance.
+const normalize = (text: string) => text.trim().toLowerCase().replace(/\s+/g, " ");
+
+export function PartyLive({ scenario }: { scenario: Scenario }) {
+  const [run, setRun] = useState(0);
+  return <Party key={run} scenario={scenario} onReset={() => setRun(run + 1)} />;
+}
+
+function Party({ scenario, onReset }: { scenario: Scenario; onReset: () => void }) {
+  const [party, setParty] = useState<PartyStatus>({
+    status: "ACTIVE",
+    agent_status: "IDLE",
+    agent_error: null,
+    active_agent_message_id: null,
+    join_code: "DEMO",
+    mode: scenario.mode,
+    budget_uah: scenario.budget,
+  });
+  const [members, setMembers] = useState(scenario.members);
+  const [messages, setMessages] = useState(scenario.messages);
+  const [seeds, setSeeds] = useState<Seed[]>([]);
+  const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [stepIndex, setStepIndex] = useState(0);
   const [content, setContent] = useState("");
-  const [sending, setSending] = useState(false);
-  const [togglingReady, setTogglingReady] = useState(false);
-  const [readyError, setReadyError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"chat" | "plan">(initialTab);
+  const [tab, setTab] = useState<"chat" | "plan">("chat");
   const listRef = useRef<HTMLDivElement>(null);
-  const lastAgentStatusRef = useRef(initialParty.agent_status);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const nextId = useRef(0);
+
   const thinkingLabel = AGENT_THINKING_COPY[party.agent_status as AgentStatus];
+  const busy = Boolean(thinkingLabel);
+  const isActive = party.status === "ACTIVE";
+  const step = scenario.steps[stepIndex];
+  const cart = buildCart(scenario.mode, seeds, recipes, members, !isActive);
+  const memberByUserId = new Map(members.map((member) => [member.user_id, member]));
+  const selfReady = memberByUserId.get(ME)?.ready ?? false;
 
   useEffect(() => {
-    const supabase = createSupabaseBrowserClient();
-    let active = true;
-    let pollTimer: ReturnType<typeof setTimeout> | undefined;
-
-    async function readJson<T>(path: string): Promise<T | null> {
-      try {
-        const response = await fetch(path, { cache: "no-store" });
-        return response.ok ? await response.json() as T : null;
-      } catch {
-        return null;
-      }
-    }
-
-    const refreshMembers = async () => {
-      const data = await readJson<Member[]>(`/api/parties/${partyId}/members`);
-      if (active && data) setMembers(data);
-    };
-    const refreshMessages = async () => {
-      const data = await readJson<ChatMessage[]>(`/api/parties/${partyId}/chat`);
-      if (active && data) setMessages(data);
-    };
-    const refreshCart = async () => {
-      const data = await readJson<Cart>(`/api/parties/${partyId}/cart`);
-      if (active && data) setCart(data);
-    };
-
-    function applyAgentState(agentStatus: string, agentError: string | null, activeMessageId: string | null) {
-      const changed = agentStatus !== lastAgentStatusRef.current;
-      const inProgress = agentStatus === "THINKING" || agentStatus === "SEARCHING" || agentStatus === "UPDATING_CART";
-      lastAgentStatusRef.current = agentStatus;
-      setParty((previous) => ({
-        ...previous,
-        agent_status: agentStatus,
-        agent_error: agentError,
-        // Legacy schemas cannot include this field in Realtime status updates. Keep the known reply target
-        // for the whole active turn; clear it only when processing actually finishes.
-        active_agent_message_id: inProgress
-          ? (activeMessageId ?? previous.active_agent_message_id)
-          : null,
-      }));
-      if (changed && (agentStatus === "DONE" || agentStatus === "ERROR")) {
-        void Promise.all([refreshMessages(), refreshCart()]);
-      }
-    }
-
-    async function refreshAgentState() {
-      const data = await readJson<{ agentStatus: string; agentError: string | null; activeMessageId: string | null }>(
-        `/api/parties/${partyId}/agent-status`,
-      );
-      if (active && data) applyAgentState(data.agentStatus, data.agentError, data.activeMessageId);
-    }
-
-    async function poll() {
-      // Realtime delivers the fast path. A complete periodic snapshot remains active even after SUBSCRIBED:
-      // reconnects and RLS token refreshes can otherwise drop one table event while status events continue.
-      await Promise.all([refreshAgentState(), refreshMessages(), refreshMembers(), refreshCart()]);
-      const busy = lastAgentStatusRef.current === "THINKING"
-        || lastAgentStatusRef.current === "SEARCHING"
-        || lastAgentStatusRef.current === "UPDATING_CART";
-      if (active) pollTimer = setTimeout(poll, busy ? 2_000 : 5_000);
-    }
-
-    const channel = supabase
-      .channel(`party-${partyId}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "parties", filter: `id=eq.${partyId}` },
-        (payload) => {
-          const next = payload.new as Record<string, unknown>;
-          applyAgentState(
-            next.agent_status as string,
-            (next.agent_error as string | null) ?? null,
-            (next.active_agent_message_id as string | null) ?? null,
-          );
-          setParty((previous) => ({
-            ...previous,
-            status: next.status as PartyStatus["status"],
-            mode: (next.mode as PartyStatus["mode"] | undefined) ?? previous.mode,
-            budget_uah: next.budget_uah === undefined
-              ? previous.budget_uah
-              : next.budget_uah === null ? null : Number(next.budget_uah),
-          }));
-        },
-      )
-      .on("postgres_changes", { event: "*", schema: "public", table: "party_members", filter: `party_id=eq.${partyId}` }, refreshMembers)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "carts", filter: `party_id=eq.${partyId}` }, refreshCart)
-      .on("postgres_changes", { event: "*", schema: "public", table: "cart_items", filter: `party_id=eq.${partyId}` }, refreshCart)
-      .on("postgres_changes", { event: "*", schema: "public", table: "cart_item_subscribers", filter: `party_id=eq.${partyId}` }, refreshCart)
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "chat_messages", filter: `party_id=eq.${partyId}` },
-        (payload) => {
-          const next = payload.new as ChatMessage;
-          setMessages((previous) => (previous.some((message) => message.id === next.id) ? previous : [...previous, next]));
-        },
-      )
-      .subscribe((status, err) => {
-        // No UI depends on this — it's here so a silent Realtime connection failure (RLS denial, network
-        // issue) shows up in the browser console instead of just looking like "nothing updates live".
-        if (status !== "SUBSCRIBED") console.log(`[party-live] realtime channel status: ${status}`, err ?? "");
-      });
-
-    void poll();
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") {
-        void Promise.all([refreshAgentState(), refreshMessages(), refreshCart()]);
-      }
-    };
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-
-    return () => {
-      active = false;
-      if (pollTimer) clearTimeout(pollTimer);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-      supabase.removeChannel(channel);
-    };
-  }, [partyId]);
+    const pending = timers.current;
+    return () => pending.forEach(clearTimeout);
+  }, []);
 
   useEffect(() => {
     listRef.current?.scrollIntoView({ block: "end" });
   }, [messages, tab, thinkingLabel]);
 
-  async function send(event: React.FormEvent) {
+  const later = (ms: number, fn: () => void) => void timers.current.push(setTimeout(fn, ms));
+  const setAgent = (agent_status: AgentStatus, active_agent_message_id: string | null) =>
+    setParty((previous) => ({ ...previous, agent_status, active_agent_message_id }));
+  const newMessage = (sender_type: ChatMessage["sender_type"], text: string, from: string | null, replyTo: string | null = null): ChatMessage => ({
+    id: `demo-${nextId.current++}`,
+    sender_type,
+    sender_user_id: from,
+    content: text,
+    reply_to_message_id: replyTo,
+    created_at: new Date().toISOString(),
+  });
+
+  function ask(from: string, text: string) {
+    const question = newMessage("USER", text, from);
+    setMessages((previous) => [...previous, question]);
+    setAgent("THINKING", question.id);
+
+    const matched = step && step.from === from && normalize(step.prompt) === normalize(text);
+    const reply = (answer: string) => {
+      setMessages((previous) => [...previous, newMessage("AGENT", answer, null, question.id)]);
+      setAgent("IDLE", null);
+    };
+
+    if (!matched) {
+      later(900, () => reply(step
+        ? "У демо я відповідаю на підготовлені запити — натисніть підказку над полем введення."
+        : "Сценарій демо завершено. Перегляньте вкладку «План» або оберіть іншу вечірку на головній."));
+      return;
+    }
+    later(800, () => setAgent("SEARCHING", question.id));
+    later(1700, () => setAgent("UPDATING_CART", question.id));
+    later(2400, () => {
+      setSeeds((previous) => [...previous, ...step.items]);
+      setRecipes((previous) => [...previous, ...(step.recipes ?? [])]);
+      setMembers((previous) => previous.map((member) => member.user_id === from
+        ? { ...member, wishes: [...member.wishes, { id: `${from}-w${member.wishes.length}`, text: step.prompt, fulfillmentStrategy: "either" }] }
+        : member));
+      setStepIndex((index) => index + 1);
+      reply(step.reply);
+    });
+  }
+
+  function send(event: React.FormEvent) {
     event.preventDefault();
     const text = content.trim();
-    if (!text || sending) return;
-    setSending(true);
+    if (!text || busy) return;
     setContent("");
-    try {
-      const response = await fetch(`/api/parties/${partyId}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: text }),
-      });
-      if (!response.ok) throw new Error(await response.text());
-      // Show it immediately from the response rather than waiting on the Realtime echo — same id, so the
-      // later postgres_changes INSERT for this same row (if it arrives at all, and whenever it does) is
-      // correctly deduped by the handler above instead of appearing as a second copy.
-      const sent = (await response.json()) as ChatMessage;
-      setMessages((previous) => (previous.some((message) => message.id === sent.id) ? previous : [...previous, sent]));
-      const wasBusy = lastAgentStatusRef.current === "THINKING"
-        || lastAgentStatusRef.current === "SEARCHING"
-        || lastAgentStatusRef.current === "UPDATING_CART";
-      lastAgentStatusRef.current = "THINKING";
-      setParty((previous) => ({
-        ...previous,
-        agent_status: "THINKING",
-        agent_error: null,
-        active_agent_message_id: wasBusy ? previous.active_agent_message_id : sent.id,
-      }));
-    } catch {
-      setContent(text); // put it back so nothing is silently lost
-    } finally {
-      setSending(false);
-    }
+    ask(ME, text);
   }
 
-  async function toggleReady(ready: boolean) {
-    if (togglingReady) return;
-    setTogglingReady(true);
-    setReadyError(null);
-    try {
-      const response = await fetch(`/api/parties/${partyId}/members`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ready }),
-      });
-      if (!response.ok) throw new Error();
-      setMembers(await response.json() as Member[]);
-    } catch {
-      setReadyError("Не вдалося оновити статус. Спробуйте ще раз.");
-    } finally {
-      setTogglingReady(false);
-    }
-  }
+  const changeItem = (itemId: string, quantity: number | null) =>
+    setSeeds((previous) => quantity === null
+      ? previous.filter((seed) => seed.id !== itemId)
+      : previous.map((seed) => seed.id === itemId ? { ...seed, qty: quantity } : seed));
 
-  const isActive = party.status === "ACTIVE";
-  const memberByUserId = new Map(members.map((member) => [member.user_id, member]));
-  const selfReady = memberByUserId.get(currentUserId)?.ready ?? false;
+  const toggleReady = (ready: boolean) =>
+    setMembers((previous) => previous.map((member) => member.user_id === ME ? { ...member, ready } : member));
+
+  const suggestionAuthor = step ? memberByUserId.get(step.from)?.name : undefined;
 
   return (
     <div className="mx-auto flex h-dvh w-full max-w-[26rem] flex-col sm:max-w-[30rem] md:max-w-[34rem]">
       <header className="shrink-0 space-y-2.5 border-b border-stone px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)]">
         <div className="flex items-center gap-2">
-          <Link href="/" className="text-ink-soft" aria-label="До моїх вечірок">
+          <Link href="/" className="text-ink-soft" aria-label="До демо-вечірок">
             ←
           </Link>
-          <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">{partyName}</h1>
+          <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">{scenario.name}</h1>
           <ModeBadge mode={party.mode} />
         </div>
-        <MembersPanel members={members} currentUserId={currentUserId} />
-        {party.agent_status === "ERROR" && party.agent_error && (
-          <InlineAlert tone="error">{party.agent_error}</InlineAlert>
-        )}
+        <MembersPanel members={members} currentUserId={ME} />
         {!isActive && <InlineAlert tone="info">Вечірку завершено — кошик оформлено.</InlineAlert>}
       </header>
 
@@ -263,7 +144,7 @@ export function PartyLive({
         <div hidden={tab !== "chat"}>
           <ChatMessages
             messages={messages}
-            currentUserId={currentUserId}
+            currentUserId={ME}
             memberNames={memberByUserId}
             listRef={listRef}
             thinkingLabel={thinkingLabel}
@@ -275,13 +156,18 @@ export function PartyLive({
             party={party}
             cart={cart}
             members={members}
-            currentUserId={currentUserId}
-            isCreator={isCreator}
-            partyId={partyId}
-            onCartUpdated={setCart}
+            currentUserId={ME}
+            onItemChange={changeItem}
             budgetForm={
-              <form action={updatePartyBudgetAction} noValidate className="flex gap-2">
-                <input type="hidden" name="partyId" value={partyId} />
+              <form
+                noValidate
+                className="flex gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const value = new FormData(event.currentTarget).get("budgetUah") as string;
+                  setParty((previous) => ({ ...previous, budget_uah: value === "" ? null : Number(value) }));
+                }}
+              >
                 <input
                   name="budgetUah"
                   type="number"
@@ -291,29 +177,17 @@ export function PartyLive({
                   placeholder="Бюджет, грн"
                   className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-stone bg-paper px-3 py-2 text-sm"
                 />
-                <SubmitButton variant="secondary" size="sm" pendingText="…">Зберегти</SubmitButton>
+                <Button type="submit" variant="secondary" size="sm">Зберегти</Button>
               </form>
             }
             actions={
               <>
-                {isCreator && isActive && cart.items.length > 0 && (
-                  <form action={finalizeCartAction} noValidate className="flex-1">
-                    <input type="hidden" name="partyId" value={partyId} />
-                    <SubmitButton pendingText="Оформлюємо…" className="w-full">Фіналізувати кошик</SubmitButton>
-                  </form>
+                {isActive && cart.items.length > 0 && (
+                  <Button type="button" className="flex-1" onClick={() => setParty((previous) => ({ ...previous, status: "COMPLETED" }))}>
+                    Фіналізувати кошик
+                  </Button>
                 )}
-                {!isCreator && isActive && (
-                  <form action={leavePartyAction} noValidate>
-                    <input type="hidden" name="partyId" value={partyId} />
-                    <SubmitButton variant="secondary" pendingText="…">Покинути вечірку</SubmitButton>
-                  </form>
-                )}
-                {isCreator && (
-                  <form action={deletePartyAction} noValidate>
-                    <input type="hidden" name="partyId" value={partyId} />
-                    <SubmitButton variant="destructive" pendingText="…">Видалити вечірку</SubmitButton>
-                  </form>
-                )}
+                <Button type="button" variant="secondary" onClick={onReset}>Почати демо спочатку</Button>
               </>
             }
           />
@@ -328,18 +202,31 @@ export function PartyLive({
                 <CheckIcon className="h-4 w-4 text-basil" />
                 Ви позначили, що готові
               </span>
-              <Button type="button" variant="secondary" size="sm" disabled={togglingReady} onClick={() => void toggleReady(false)}>
-                {togglingReady ? "…" : "Ще щось написати"}
+              <Button type="button" variant="secondary" size="sm" onClick={() => toggleReady(false)}>
+                Ще щось написати
               </Button>
             </div>
           ) : (
             <>
+              {step ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => ask(step.from, step.prompt)}
+                  className="mb-2 h-auto w-full whitespace-normal py-2 text-left"
+                >
+                  {step.from === ME ? "Спробуйте" : `${suggestionAuthor} пише`}: «{step.prompt}»
+                </Button>
+              ) : (
+                <p className="mb-2 text-xs text-ink-soft">Сценарій демо завершено — подивіться вкладку «План».</p>
+              )}
               <label className="mb-1.5 flex w-fit items-center gap-1.5 text-xs text-ink-soft">
                 <input
                   type="checkbox"
                   checked={false}
-                  disabled={togglingReady}
-                  onChange={() => void toggleReady(true)}
+                  onChange={() => toggleReady(true)}
                   className="h-3.5 w-3.5 rounded border-stone accent-basil"
                 />
                 Я готовий(-а) — більше нічого не пишу
@@ -350,16 +237,15 @@ export function PartyLive({
                   onChange={(event) => setContent(event.target.value)}
                   placeholder={MODE_COPY[party.mode].placeholder}
                   required
-                  disabled={sending}
+                  disabled={busy}
                   className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-stone bg-paper px-3 py-2 text-[0.95rem] disabled:opacity-50"
                 />
-                <Button type="submit" disabled={sending} size="sm" className="px-4">
-                  {sending ? "…" : "Надіслати"}
+                <Button type="submit" disabled={busy} size="sm" className="px-4">
+                  {busy ? "…" : "Надіслати"}
                 </Button>
               </form>
             </>
           )}
-          {readyError && <p className="mt-1.5 text-xs text-danger" role="alert">{readyError}</p>}
         </div>
       )}
 

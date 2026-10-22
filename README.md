@@ -1,3 +1,6 @@
+> [!NOTE]
+> **`demo` branch.** A static build of the UI with no login, database, MCP or AI: the agent's replies are scripted in `src/demo/scenarios.ts`. Deploys to Vercel with no environment variables. The real implementation lives on `main`.
+
 <div align="center">
 
 # Silpo Party

@@ -8,11 +8,13 @@ import { Money } from "@/components/ui/money";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { TornPanel } from "@/components/ui/panel";
 import { buttonClasses } from "@/components/ui/button-classes";
-import { InviteLink } from "@/components/ui/invite-link";
 import { Button } from "@/components/ui/button";
 import { BasketIcon, ChevronDownIcon, MinusIcon, PlusIcon, TrashIcon } from "@/components/ui/icons";
 
 import type { Cart, CartItem, Member, PartyStatus, Recipe } from "./types";
+
+/** `quantity: null` removes the line. */
+export type ItemChange = (itemId: string, quantity: number | null) => void;
 
 function assignees(item: CartItem | Recipe, members: Member[], currentUserId: string) {
   const ids = "assigned_member_ids" in item ? item.assigned_member_ids : item.assignedMemberIds;
@@ -39,19 +41,16 @@ function ItemRow({
   item,
   members,
   currentUserId,
-  partyId,
   canEdit,
-  onCartUpdated,
+  onChange,
 }: {
   item: CartItem;
   members: Member[];
   currentUserId: string;
-  partyId: string;
   canEdit: boolean;
-  onCartUpdated: (cart: Cart) => void;
+  onChange: ItemChange;
 }) {
   const [value, setValue] = useState(String(item.quantity));
-  const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [imageFailed, setImageFailed] = useState(false);
   const skipNextBlur = useRef(false);
@@ -60,8 +59,8 @@ function ItemRow({
     if (document.activeElement === inputRef.current) skipNextBlur.current = true;
   };
 
-  async function mutate(quantity: number | null) {
-    if (pending || !canEdit) return;
+  function mutate(quantity: number | null) {
+    if (!canEdit) return;
     if (quantity !== null && (!Number.isSafeInteger(quantity) || quantity < 1)) {
       setValue(String(item.quantity));
       setError("Кількість має бути цілим числом від 1.");
@@ -71,48 +70,11 @@ function ItemRow({
       setValue(String(item.quantity));
       return;
     }
-
-    setPending(true);
     setError(null);
-    try {
-      const response = await fetch(`/api/parties/${partyId}/cart`, {
-        method: quantity === null ? "DELETE" : "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ itemId: item.id, ...(quantity === null ? {} : { quantity }) }),
-      });
-      if (!response.ok) throw new Error();
-      onCartUpdated(await response.json() as Cart);
-    } catch {
-      setValue(String(item.quantity));
-      setError("Не вдалося змінити товар. Спробуйте ще раз.");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  async function mutateSubscription(subscribed: boolean) {
-    if (pending || !canEdit) return;
-    setPending(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/parties/${partyId}/cart`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ itemId: item.id, subscribed }),
-      });
-      if (!response.ok) throw new Error();
-      onCartUpdated(await response.json() as Cart);
-    } catch {
-      setError("Не вдалося змінити учасників оплати. Спробуйте ще раз.");
-    } finally {
-      setPending(false);
-    }
+    onChange(item.id, quantity);
   }
 
   const payers = payerAvatars(item, members, currentUserId);
-  const currentUserPays = item.assigned_member_ids.includes(currentUserId);
-  const currentUserIsOriginalPayer = item.base_assigned_member_ids.includes(currentUserId);
-  const currentUserSubscribed = item.subscriber_member_ids.includes(currentUserId);
 
   return (
     <li className="py-3">
@@ -144,28 +106,18 @@ function ItemRow({
           <div className="mt-2 flex min-h-8 flex-wrap items-center gap-2">
             <span className="text-xs text-ink-soft">Оплачують</span>
             {payers.length > 0 && <AvatarStack members={payers} max={5} />}
-            {canEdit && !currentUserPays && (
-              <Button type="button" variant="secondary" size="sm" disabled={pending} onClick={() => void mutateSubscription(true)}>
-                Долучитися
-              </Button>
-            )}
-            {canEdit && currentUserSubscribed && !currentUserIsOriginalPayer && (
-              <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => void mutateSubscription(false)}>
-                Не оплачувати
-              </Button>
-            )}
           </div>
         </div>
       </div>
       {canEdit && (
-        <div className="mt-2 flex items-center gap-1.5" aria-busy={pending}>
+        <div className="mt-2 flex items-center gap-1.5">
           <Button
             type="button"
             variant="secondary"
             size="icon"
-            disabled={pending || Number(value) <= 1}
+            disabled={Number(value) <= 1}
             onPointerDown={prepareButtonClick}
-            onClick={() => void mutate((Number(value) || item.quantity) - 1)}
+            onClick={() => mutate((Number(value) || item.quantity) - 1)}
             aria-label={`Зменшити кількість: ${item.name}`}
             title="Зменшити кількість"
           >
@@ -180,7 +132,6 @@ function ItemRow({
             min="1"
             step="1"
             value={value}
-            disabled={pending}
             aria-invalid={Boolean(error)}
             aria-describedby={error ? `quantity-error-${item.id}` : undefined}
             onChange={(event) => {
@@ -192,20 +143,19 @@ function ItemRow({
                 skipNextBlur.current = false;
                 return;
               }
-              void mutate(Number(value));
+              mutate(Number(value));
             }}
             onKeyDown={(event) => {
               if (event.key === "Enter") event.currentTarget.blur();
             }}
-            className="h-10 w-16 rounded-[var(--radius-md)] border border-stone bg-paper px-2 text-center font-numeral text-sm disabled:opacity-50"
+            className="h-10 w-16 rounded-[var(--radius-md)] border border-stone bg-paper px-2 text-center font-numeral text-sm "
           />
           <Button
             type="button"
             variant="secondary"
             size="icon"
-            disabled={pending}
             onPointerDown={prepareButtonClick}
-            onClick={() => void mutate((Number(value) || item.quantity) + 1)}
+            onClick={() => mutate((Number(value) || item.quantity) + 1)}
             aria-label={`Збільшити кількість: ${item.name}`}
             title="Збільшити кількість"
           >
@@ -215,16 +165,14 @@ function ItemRow({
             type="button"
             variant="ghost"
             size="icon"
-            disabled={pending}
             onPointerDown={prepareButtonClick}
-            onClick={() => void mutate(null)}
+            onClick={() => mutate(null)}
             className="ml-auto text-danger hover:bg-danger-soft hover:text-danger"
-            aria-label={pending ? "Зберігаємо зміни" : `Видалити товар: ${item.name}`}
-            title={pending ? "Зберігаємо зміни" : "Видалити товар"}
+            aria-label={`Видалити товар: ${item.name}`}
+            title="Видалити товар"
           >
-            {pending ? <span aria-hidden>…</span> : <TrashIcon className="h-4 w-4" />}
+            <TrashIcon className="h-4 w-4" />
           </Button>
-          {pending && <span className="sr-only" aria-live="polite">Зберігаємо…</span>}
         </div>
       )}
       {error && <p id={`quantity-error-${item.id}`} className="mt-1.5 text-xs text-danger" role="alert">{error}</p>}
@@ -275,21 +223,17 @@ export function PlanPanel({
   cart,
   members,
   currentUserId,
-  isCreator,
   budgetForm,
   actions,
-  partyId,
-  onCartUpdated,
+  onItemChange,
 }: {
   party: PartyStatus;
   cart: Cart;
   members: Member[];
   currentUserId: string;
-  isCreator: boolean;
   budgetForm: ReactNode;
   actions?: ReactNode;
-  partyId: string;
-  onCartUpdated: (cart: Cart) => void;
+  onItemChange: ItemChange;
 }) {
   const total = cart.total_uah ?? 0;
   const budget = party.budget_uah;
@@ -324,9 +268,8 @@ export function PlanPanel({
                 item={item}
                 members={members}
                 currentUserId={currentUserId}
-                partyId={partyId}
                 canEdit={party.status === "ACTIVE"}
-                onCartUpdated={onCartUpdated}
+                onChange={onItemChange}
               />
             ))}
           </ul>
@@ -365,7 +308,7 @@ export function PlanPanel({
           </ul>
         )}
 
-        {isCreator && party.status === "ACTIVE" && (
+        {party.status === "ACTIVE" && (
           <details className="border-t border-stone pt-3 text-sm">
             <summary className="cursor-pointer text-ink-soft [&::-webkit-details-marker]:hidden">Змінити бюджет</summary>
             <div className="mt-2">{budgetForm}</div>
@@ -379,14 +322,13 @@ export function PlanPanel({
             rel="noopener noreferrer"
             className={`${buttonClasses("primary", "md")} mt-1 w-full`}
           >
-            Оформити на Silpo
+            Оформити на Silpo (демо)
           </a>
         )}
       </TornPanel>
 
       {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
 
-      {isCreator && <InviteLink code={party.join_code} />}
     </div>
   );
 }
