@@ -10,7 +10,6 @@ test("every scenario is internally consistent", () => {
     const itemIds = scenario.steps.flatMap((step) => step.items.map((item) => item.id));
     assert.equal(new Set(itemIds).size, itemIds.length, `${scenario.id}: duplicate item ids`);
     for (const step of scenario.steps) {
-      assert.ok(ids.has(step.from), `${scenario.id}: unknown author ${step.from}`);
       for (const item of step.items) for (const payer of item.payers) assert.ok(ids.has(payer), `${scenario.id}: unknown payer ${payer}`);
       if (step.recipes) {
         assert.equal(parseRecipeMessages(step.reply)?.recipes.length, step.recipes.length, `${scenario.id}: recipe message does not parse`);

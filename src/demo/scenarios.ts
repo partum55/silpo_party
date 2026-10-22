@@ -9,8 +9,8 @@ export const ME = "me";
 /** A cart line before quantity edits. `payers` are the members who split its cost. */
 export type Seed = { id: string; name: string; price: number; pack: PackageSize; qty: number; payers: string[] };
 
-/** One scripted exchange: `from` "writes" `prompt`, the agent answers with `reply` and fills the cart. */
-export type Step = { from: string; prompt: string; reply: string; items: Seed[]; recipes?: Recipe[] };
+/** One scripted exchange: the viewer sends `prompt`, the agent answers with `reply` and fills the cart. */
+export type Step = { prompt: string; reply: string; items: Seed[]; recipes?: Recipe[] };
 
 export type Scenario = {
   id: string;
@@ -127,7 +127,6 @@ export const SCENARIOS: Scenario[] = [
     ],
     steps: [
       {
-        from: ME,
         prompt: "Заплануй шашлики з друзями на 6 осіб",
         reply:
           "Склав план на 6 осіб (≈ 200 г м'яса на людину + гарнір). Оля не їсть свинину, тож основа — курячі стегна й яловичина. " +
@@ -145,7 +144,6 @@ export const SCENARIOS: Scenario[] = [
         ],
       },
       {
-        from: ME,
         prompt: "Додай напоїв і щось солодке",
         reply: "Додав воду, сік і лимонад з розрахунку ≈ 1,5 л на людину, а на десерт — кавун і маршмелоу для смаження на вогні.",
         items: [
@@ -171,7 +169,6 @@ export const SCENARIOS: Scenario[] = [
     ],
     steps: [
       {
-        from: ME,
         prompt: "Хочу приготувати пасту карбонару",
         reply:
           "Додав карбонару на 4 порції. Сіль та олію вважаю домашніми запасами, решту інгредієнтів знайшов у Сільпо й додав до списку покупок.\n\n" +
@@ -188,8 +185,7 @@ export const SCENARIOS: Scenario[] = [
         recipes: [carbonara],
       },
       {
-        from: "sonya",
-        prompt: "Додай тірамісу на десерт, щось легке",
+        prompt: "Додай тірамісу на десерт — Соня просила щось легке",
         reply:
           "Тірамісу — класичний варіант без випікання. Яєць з першої упаковки вистачить на обидві страви, тому нових не додавав.\n\n" +
           "Рецепт «Тірамісу» (6 порцій):\n" +
@@ -218,7 +214,6 @@ export const SCENARIOS: Scenario[] = [
     ],
     steps: [
       {
-        from: ME,
         prompt: "Додай мені молоко і хліб",
         reply: "Додав молоко 2,5% (2 пакети) і хліб — це ваші товари, платите ви.",
         items: [
@@ -227,8 +222,7 @@ export const SCENARIOS: Scenario[] = [
         ],
       },
       {
-        from: "olya",
-        prompt: "Додай мені кефір, сир кисломолочний і авокадо",
+        prompt: "Додай Олі кефір, сир кисломолочний і авокадо",
         reply: "Додав кефір, кисломолочний сир і два авокадо. Ці товари оплачує Оля.",
         items: [
           seed("s3", "Кефір 1%, 900 г", 44.9, 900, "g", 1, ["olya"]),
@@ -237,8 +231,7 @@ export const SCENARIOS: Scenario[] = [
         ],
       },
       {
-        from: ME,
-        prompt: "Додай яйця, беремо навпіл з Олею",
+        prompt: "Додай яйця, платимо навпіл з Олею",
         reply: "Додав яйця й записав оплату на вас обох — вартість поділена порівну.",
         items: [seed("s6", "Яйця курячі С1, 10 шт", 64.9, 10, "piece", 1, [ME, "olya"])],
       },

@@ -8,6 +8,8 @@ import { Money } from "@/components/ui/money";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { TornPanel } from "@/components/ui/panel";
 import { buttonClasses } from "@/components/ui/button-classes";
+import { DEMO_ONLY } from "@/demo/copy";
+import { InviteLink } from "@/components/ui/invite-link";
 import { Button } from "@/components/ui/button";
 import { BasketIcon, ChevronDownIcon, MinusIcon, PlusIcon, TrashIcon } from "@/components/ui/icons";
 
@@ -75,6 +77,9 @@ function ItemRow({
   }
 
   const payers = payerAvatars(item, members, currentUserId);
+  const currentUserPays = item.assigned_member_ids.includes(currentUserId);
+  const currentUserIsOriginalPayer = item.base_assigned_member_ids.includes(currentUserId);
+  const currentUserSubscribed = item.subscriber_member_ids.includes(currentUserId);
 
   return (
     <li className="py-3">
@@ -106,6 +111,16 @@ function ItemRow({
           <div className="mt-2 flex min-h-8 flex-wrap items-center gap-2">
             <span className="text-xs text-ink-soft">Оплачують</span>
             {payers.length > 0 && <AvatarStack members={payers} max={5} />}
+            {canEdit && !currentUserPays && (
+              <Button type="button" variant="secondary" size="sm" disabled title={DEMO_ONLY}>
+                Долучитися
+              </Button>
+            )}
+            {canEdit && currentUserSubscribed && !currentUserIsOriginalPayer && (
+              <Button type="button" variant="ghost" size="sm" disabled title={DEMO_ONLY}>
+                Не оплачувати
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -223,6 +238,7 @@ export function PlanPanel({
   cart,
   members,
   currentUserId,
+  isCreator,
   budgetForm,
   actions,
   onItemChange,
@@ -231,6 +247,7 @@ export function PlanPanel({
   cart: Cart;
   members: Member[];
   currentUserId: string;
+  isCreator: boolean;
   budgetForm: ReactNode;
   actions?: ReactNode;
   onItemChange: ItemChange;
@@ -308,7 +325,7 @@ export function PlanPanel({
           </ul>
         )}
 
-        {party.status === "ACTIVE" && (
+        {isCreator && party.status === "ACTIVE" && (
           <details className="border-t border-stone pt-3 text-sm">
             <summary className="cursor-pointer text-ink-soft [&::-webkit-details-marker]:hidden">Змінити бюджет</summary>
             <div className="mt-2">{budgetForm}</div>
@@ -322,13 +339,14 @@ export function PlanPanel({
             rel="noopener noreferrer"
             className={`${buttonClasses("primary", "md")} mt-1 w-full`}
           >
-            Оформити на Silpo (демо)
+            Оформити на Silpo
           </a>
         )}
       </TornPanel>
 
       {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
 
+      {isCreator && <InviteLink code={party.join_code} />}
     </div>
   );
 }

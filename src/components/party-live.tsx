@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { buildCart } from "@/demo/cart";
+import { DEMO_ONLY } from "@/demo/copy";
 import { ME, type Scenario, type Seed } from "@/demo/scenarios";
 import { MODE_COPY } from "@/lib/party/mode-copy";
 import { AGENT_THINKING_COPY, type AgentStatus } from "@/lib/party/agent-status-copy";
@@ -13,22 +14,17 @@ import { MembersPanel } from "@/components/party/members-panel";
 import { PlanPanel } from "@/components/party/plan-panel";
 import type { ChatMessage, PartyStatus, Recipe } from "@/components/party/types";
 
-import { Button } from "@/components/ui/button";
+import { Button, SubmitButton } from "@/components/ui/button";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { ModeBadge } from "@/components/ui/mode-badge";
 import { TabBar } from "@/components/ui/tab-bar";
 import { ChatIcon, CheckIcon, ListIcon } from "@/components/ui/icons";
 
-// The demo has no backend: the "agent" replays the scenario's scripted steps. A step runs when its exact prompt
-// is sent (via the suggestion button or typed); anything else gets a canned "demo only" reply and doesn't advance.
+// The demo has no backend: the "agent" replays the scenario's scripted steps. The input comes pre-filled with the
+// next step's prompt; sending it as-is runs the step, anything else gets a canned reply and doesn't advance.
 const normalize = (text: string) => text.trim().toLowerCase().replace(/\s+/g, " ");
 
 export function PartyLive({ scenario }: { scenario: Scenario }) {
-  const [run, setRun] = useState(0);
-  return <Party key={run} scenario={scenario} onReset={() => setRun(run + 1)} />;
-}
-
-function Party({ scenario, onReset }: { scenario: Scenario; onReset: () => void }) {
   const [party, setParty] = useState<PartyStatus>({
     status: "ACTIVE",
     agent_status: "IDLE",
@@ -43,7 +39,7 @@ function Party({ scenario, onReset }: { scenario: Scenario; onReset: () => void 
   const [seeds, setSeeds] = useState<Seed[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [stepIndex, setStepIndex] = useState(0);
-  const [content, setContent] = useState("");
+  const [content, setContent] = useState(scenario.steps[0]?.prompt ?? "");
   const [tab, setTab] = useState<"chat" | "plan">("chat");
   const listRef = useRef<HTMLDivElement>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -78,20 +74,21 @@ function Party({ scenario, onReset }: { scenario: Scenario; onReset: () => void 
     created_at: new Date().toISOString(),
   });
 
-  function ask(from: string, text: string) {
-    const question = newMessage("USER", text, from);
+  function ask(text: string) {
+    const question = newMessage("USER", text, ME);
     setMessages((previous) => [...previous, question]);
     setAgent("THINKING", question.id);
 
-    const matched = step && step.from === from && normalize(step.prompt) === normalize(text);
+    const matched = step && normalize(step.prompt) === normalize(text);
     const reply = (answer: string) => {
       setMessages((previous) => [...previous, newMessage("AGENT", answer, null, question.id)]);
       setAgent("IDLE", null);
+      setContent((matched ? scenario.steps[stepIndex + 1] : step)?.prompt ?? "");
     };
 
     if (!matched) {
       later(900, () => reply(step
-        ? "У демо я відповідаю на підготовлені запити — натисніть підказку над полем введення."
+        ? "У демо я відповідаю на підготовлені запити — надішліть підказку з поля введення."
         : "Сценарій демо завершено. Перегляньте вкладку «План» або оберіть іншу вечірку на головній."));
       return;
     }
@@ -100,8 +97,8 @@ function Party({ scenario, onReset }: { scenario: Scenario; onReset: () => void 
     later(2400, () => {
       setSeeds((previous) => [...previous, ...step.items]);
       setRecipes((previous) => [...previous, ...(step.recipes ?? [])]);
-      setMembers((previous) => previous.map((member) => member.user_id === from
-        ? { ...member, wishes: [...member.wishes, { id: `${from}-w${member.wishes.length}`, text: step.prompt, fulfillmentStrategy: "either" }] }
+      setMembers((previous) => previous.map((member) => member.user_id === ME
+        ? { ...member, wishes: [...member.wishes, { id: `${ME}-w${member.wishes.length}`, text: step.prompt, fulfillmentStrategy: "either" }] }
         : member));
       setStepIndex((index) => index + 1);
       reply(step.reply);
@@ -113,7 +110,7 @@ function Party({ scenario, onReset }: { scenario: Scenario; onReset: () => void 
     const text = content.trim();
     if (!text || busy) return;
     setContent("");
-    ask(ME, text);
+    ask(text);
   }
 
   const changeItem = (itemId: string, quantity: number | null) =>
@@ -124,13 +121,11 @@ function Party({ scenario, onReset }: { scenario: Scenario; onReset: () => void 
   const toggleReady = (ready: boolean) =>
     setMembers((previous) => previous.map((member) => member.user_id === ME ? { ...member, ready } : member));
 
-  const suggestionAuthor = step ? memberByUserId.get(step.from)?.name : undefined;
-
   return (
     <div className="mx-auto flex h-dvh w-full max-w-[26rem] flex-col sm:max-w-[30rem] md:max-w-[34rem]">
       <header className="shrink-0 space-y-2.5 border-b border-stone px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)]">
         <div className="flex items-center gap-2">
-          <Link href="/" className="text-ink-soft" aria-label="До демо-вечірок">
+          <Link href="/" className="text-ink-soft" aria-label="До моїх вечірок">
             ←
           </Link>
           <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">{scenario.name}</h1>
@@ -158,6 +153,7 @@ function Party({ scenario, onReset }: { scenario: Scenario; onReset: () => void 
             members={members}
             currentUserId={ME}
             onItemChange={changeItem}
+            isCreator
             budgetForm={
               <form
                 noValidate
@@ -177,17 +173,24 @@ function Party({ scenario, onReset }: { scenario: Scenario; onReset: () => void 
                   placeholder="Бюджет, грн"
                   className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-stone bg-paper px-3 py-2 text-sm"
                 />
-                <Button type="submit" variant="secondary" size="sm">Зберегти</Button>
+                <SubmitButton variant="secondary" size="sm" pendingText="…">Зберегти</SubmitButton>
               </form>
             }
             actions={
               <>
                 {isActive && cart.items.length > 0 && (
-                  <Button type="button" className="flex-1" onClick={() => setParty((previous) => ({ ...previous, status: "COMPLETED" }))}>
-                    Фіналізувати кошик
-                  </Button>
+                  <form
+                    noValidate
+                    className="flex-1"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      setParty((previous) => ({ ...previous, status: "COMPLETED" }));
+                    }}
+                  >
+                    <SubmitButton pendingText="Оформлюємо…" className="w-full">Фіналізувати кошик</SubmitButton>
+                  </form>
                 )}
-                <Button type="button" variant="secondary" onClick={onReset}>Почати демо спочатку</Button>
+                <Button type="button" variant="destructive" disabled title={DEMO_ONLY}>Видалити вечірку</Button>
               </>
             }
           />
@@ -208,20 +211,6 @@ function Party({ scenario, onReset }: { scenario: Scenario; onReset: () => void 
             </div>
           ) : (
             <>
-              {step ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => ask(step.from, step.prompt)}
-                  className="mb-2 h-auto w-full whitespace-normal py-2 text-left"
-                >
-                  {step.from === ME ? "Спробуйте" : `${suggestionAuthor} пише`}: «{step.prompt}»
-                </Button>
-              ) : (
-                <p className="mb-2 text-xs text-ink-soft">Сценарій демо завершено — подивіться вкладку «План».</p>
-              )}
               <label className="mb-1.5 flex w-fit items-center gap-1.5 text-xs text-ink-soft">
                 <input
                   type="checkbox"
