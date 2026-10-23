@@ -1,5 +1,4 @@
 import Link from "next/link";
-import Image from "next/image";
 
 import { SCENARIOS } from "@/demo/scenarios";
 import { DEMO_ONLY } from "@/demo/copy";
@@ -17,10 +16,6 @@ export default function Home() {
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-[26rem] flex-col sm:max-w-[30rem] md:max-w-[34rem]">
       <header className="px-5 pb-2 pt-[calc(env(safe-area-inset-top)+1.5rem)]">
-        <div className="mb-4 flex items-center gap-2.5">
-          <Image src="/logo.jpeg" alt="Silpo Party" width={42} height={42} className="rounded-xl" />
-          <span className="text-lg font-semibold tracking-tight">Silpo Party</span>
-        </div>
         <p className="text-sm text-ink-soft">Привіт, Назар</p>
         <h1 className="text-2xl font-semibold tracking-tight">Ваші вечірки</h1>
       </header>
